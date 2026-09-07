@@ -1,0 +1,25 @@
+/* 暗色主题覆盖 Element Plus 默认样式 */
+.el-menu {
+  background-color: var(--bg-secondary) !important;
+  border-right-color: var(--border-color) !important;
+}
+.el-card {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+.el-table {
+  --el-table-bg-color: var(--bg-card);
+  --el-table-tr-bg-color: var(--bg-card);
+  --el-table-header-bg-color: var(--bg-secondary);
+  --el-table-border-color: var(--border-color);
+  --el-table-text-color: var(--text-primary);
+  --el-table-header-text-color: var(--text-secondary);
+}
+.el-input__wrapper {
+  background-color: var(--bg-input) !important;
+  box-shadow: 0 0 0 1px var(--border-color) inset !important;
+}
+.el-button--primary {
+  --el-button-bg-color: var(--accent);
+  --el-button-border-color: var(--accent);
+}

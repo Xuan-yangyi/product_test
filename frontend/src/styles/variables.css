@@ -1,0 +1,22 @@
+:root {
+  /* 暗色主题 */
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-card: #0f3460;
+  --bg-input: #1a1a2e;
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --border-color: #2a2a4a;
+  --accent: #409eff;
+  --accent-hover: #66b1ff;
+  --success: #67c23a;
+  --warning: #e6a23c;
+  --danger: #f56c6c;
+  --info: #909399;
+  --scrollbar-bg: #1a1a2e;
+  --scrollbar-thumb: #3a3a5a;
+  --font-mono: 'Consolas', 'Courier New', 'Microsoft YaHei Mono', monospace;
+  --font-sans: 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --radius: 4px;
+  --shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.3);
+}

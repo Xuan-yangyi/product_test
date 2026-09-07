@@ -1,0 +1,10 @@
+{
+  "api_endpoint": "https://your-api-endpoint.com/v1/chat/completions",
+  "api_key": "YOUR_API_KEY_HERE",
+  "model": "DeepSeek-V4-Pro-0813",
+  "max_tokens": 4096,
+  "temperature": 0.7,
+  "auto_analyze_on_complete": true,
+  "auto_analyze_on_error": true,
+  "system_prompt": "你是一个专业的嵌入式设备老化测试分析专家。请根据提供的日志信息，分析老化测试的执行情况、性能表现、异常检测和优化建议。请用中文回复。"
+}
