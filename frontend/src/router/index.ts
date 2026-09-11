@@ -28,6 +28,12 @@ const router = createRouter({
       meta: { title: '测试结果' },
     },
     {
+      path: '/sn-captures',
+      name: 'sn-captures',
+      component: () => import('@/views/SnCaptureView.vue'),
+      meta: { title: 'SN 抓拍' },
+    },
+    {
       path: '/devices',
       name: 'devices',
       component: () => import('@/views/DeviceManageView.vue'),
