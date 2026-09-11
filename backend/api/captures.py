@@ -62,3 +62,31 @@ async def upload_capture(
     svc = get_service()
     return svc.add(sn=sn, image_path=str(rel), score=score,
                    captured_at=captured_at, source="SE9")
+
+
+@router.get("/captures")
+async def list_captures(
+    sn: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """按 SN（可选）分页查询抓拍列表。"""
+    svc = get_service()
+    ret = svc.list(sn=sn, limit=limit, offset=offset)
+    for it in ret["items"]:
+        it["image_url"] = f"/api/v1/captures/{it['id']}/image"
+    return ret
+
+
+@router.get("/captures/{cap_id}/image")
+async def get_capture_image(cap_id: int):
+    """返回某条抓拍的图片文件。"""
+    from fastapi.responses import FileResponse
+    svc = get_service()
+    row = svc.get(cap_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="抓拍不存在")
+    abs_path = Config.DATA_DIR / row["image_path"]
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail="图片文件缺失")
+    return FileResponse(str(abs_path))
