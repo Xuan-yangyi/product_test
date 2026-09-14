@@ -3,6 +3,9 @@
     <div class="toolbar">
     <el-input v-model="sn" placeholder="输入 SN 搜索（留空看全部）" clearable
            style="width: 320px" @keyup.enter="load" />
+  <el-date-picker v-model="dateRange" type="daterange" range-separator="至"
+           start-placeholder="入库起始日" end-placeholder="入库结束日"
+           value-format="YYYY-MM-DD" clearable />
   <el-button type="primary" @click="load">查询</el-button>
     </div>
 
@@ -18,7 +21,7 @@
         </el-image>
         <div class="meta">
       <div class="sn">{{ it.sn }}</div>
-     <div class="sub">score {{ it.score?.toFixed(3) }} · {{ it.captured_at || "-" }}</div>
+     <div class="sub">score {{ it.score?.toFixed(3) }} · 入库 {{ it.uploaded_at || "-" }}</div>
         </div>
       </el-card>
     </div>
@@ -30,13 +33,19 @@ import { ref, onMounted } from "vue"
 import { captureApi, type CaptureItem } from "@/api/captures"
 
 const sn = ref("")
+const dateRange = ref<[string, string] | null>(null)
 const items = ref<CaptureItem[]>([])
 const loading = ref(false)
 
 async function load() {
   loading.value = true
   try {
-    const res = await captureApi.list({ sn: sn.value || undefined, limit: 100, offset: 0 })
+    const res = await captureApi.list({
+      sn: sn.value || undefined,
+      start: dateRange.value?.[0] || undefined,
+      end: dateRange.value?.[1] || undefined,
+      limit: 100, offset: 0,
+    })
     items.value = res.items
   } finally {
   loading.value = false

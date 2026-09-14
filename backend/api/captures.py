@@ -1,5 +1,5 @@
 """SN 抓拍 API — 接收 SE9 上传的 SN+图片，入库并提供查询。"""
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException
@@ -67,12 +67,18 @@ async def upload_capture(
 @router.get("/captures")
 async def list_captures(
     sn: Optional[str] = Query(None),
+    start: Optional[str] = Query(None, description="入库时间起(含)，YYYY-MM-DD"),
+    end: Optional[str] = Query(None, description="入库时间止(含当天)，YYYY-MM-DD"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    """按 SN（可选）分页查询抓拍列表。"""
+    """按 SN（可选）+ 入库时间范围（可选）分页查询抓拍列表。"""
+    start_dt = parse_ts(start) if start else None
+    end_dt = parse_ts(end) if end else None
+    if end_dt:
+        end_dt = end_dt + timedelta(days=1)  # 含当天：转成次日 0 点作为开区间上界
     svc = get_service()
-    ret = svc.list(sn=sn, limit=limit, offset=offset)
+    ret = svc.list(sn=sn, limit=limit, offset=offset, start=start_dt, end=end_dt)
     for it in ret["items"]:
         it["image_url"] = f"/api/v1/captures/{it['id']}/image"
     return ret

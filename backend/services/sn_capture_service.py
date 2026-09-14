@@ -24,12 +24,18 @@ class SnCaptureService:
         finally:
             session.close()
 
-    def list(self, sn: Optional[str], limit: int = 50, offset: int = 0) -> dict:
+    def list(self, sn: Optional[str], limit: int = 50, offset: int = 0,
+             start: Optional[datetime] = None, end: Optional[datetime] = None) -> dict:
         session = self._session_factory()
         try:
             q = session.query(SnCapture)
             if sn:
                 q = q.filter(SnCapture.sn == sn)
+            # 按入库时间 uploaded_at 做日期范围过滤（半开区间 [start, end)）
+            if start:
+                q = q.filter(SnCapture.uploaded_at >= start)
+            if end:
+                q = q.filter(SnCapture.uploaded_at < end)
             total = q.count()
             rows = (q.order_by(SnCapture.id.desc())
                      .offset(offset).limit(limit).all())
@@ -53,6 +59,7 @@ class SnCaptureService:
             "sn": r.sn,
             "score": r.score,
             "captured_at": r.captured_at.isoformat() if r.captured_at else None,
+            "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
             "image_path": r.image_path,
             "source": r.source,
         }
