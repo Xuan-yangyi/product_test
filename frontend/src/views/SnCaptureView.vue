@@ -22,7 +22,7 @@
         <div class="meta">
       <div class="sn">{{ it.sn }}</div>
      <div class="sub">score {{ it.score?.toFixed(3) }}</div>
-     <div class="sub">入库 {{ fmtTime(it.uploaded_at) }}</div>
+     <div class="sub">{{ fmtTime(it.uploaded_at) }}</div>
         </div>
       </el-card>
     </div>
