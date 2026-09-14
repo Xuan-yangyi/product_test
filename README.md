@@ -132,6 +132,40 @@ chmod +x start.sh
 
 详细配置格式见各文件注释。
 
+## SN 抓拍（设备图片内容）
+
+SE9 识别到设备 SN 时，把 **SN + 命中帧设备图**推送到本系统入库；前端「SN 抓拍」页可按
+**SN + 入库日期范围**查询并查看对应设备图。该特性完全加法式，独立于老化测试（不改
+`db_models.py` / `TestRecord` / 老化视图）。
+
+### 图片与数据的落盘位置 / 形式
+
+| 内容 | 路径 / 形式 |
+|------|-------------|
+| 图片文件 | `data/sn_captures/<SN>/<时间戳>.<jpg\|png>`（按 SN 分目录，一张一文件） |
+| 数据库 | `data/results.db`（与老化共用同一 SQLite），独立表 **`sn_captures`** |
+| DB 中的图片引用 | 表字段 `image_path` 只存**相对 DATA_DIR 的路径**，取图接口据此拼绝对路径返回文件 |
+
+`sn_captures` 表字段：
+
+| 字段 | 含义 |
+|------|------|
+| `id` | 主键 |
+| `sn` | 设备序列号（索引） |
+| `image_path` | 设备图相对路径（相对 `data/`） |
+| `score` | 识别置信度 |
+| `captured_at` | SE9 实际抓拍时间（板子时钟，可能为空） |
+| `source` | 来源，默认 `SE9` |
+| `uploaded_at` | 入库时间（服务器时钟，自动，永不为空）——**日期范围筛选即按此字段** |
+
+### 相关 API（均为新增，加法式）
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/captures` | POST | SE9 上传：multipart `sn`(必填)、`score`、`ts`、`image`(jpeg/png, <20MB) |
+| `/api/v1/captures` | GET | 查询：`sn`、`start`/`end`(入库日期 YYYY-MM-DD，含当天)、`limit`、`offset`；返回 `{total, items[...image_url, uploaded_at]}` |
+| `/api/v1/captures/{id}/image` | GET | 返回该条抓拍的设备图文件 |
+
 ## License
 
 Internal use — CVITEK.
