@@ -21,7 +21,8 @@
         </el-image>
         <div class="meta">
       <div class="sn">{{ it.sn }}</div>
-     <div class="sub">score {{ it.score?.toFixed(3) }} · 入库 {{ it.uploaded_at || "-" }}</div>
+     <div class="sub">score {{ it.score?.toFixed(3) }}</div>
+     <div class="sub">入库 {{ fmtTime(it.uploaded_at) }}</div>
         </div>
       </el-card>
     </div>
@@ -36,6 +37,11 @@ const sn = ref("")
 const dateRange = ref<[string, string] | null>(null)
 const items = ref<CaptureItem[]>([])
 const loading = ref(false)
+
+// 入库时间美化：ISO "2026-09-11T14:26:01.059158" → "2026-09-11 14:26:01"
+function fmtTime(t: string | null): string {
+  return t ? t.replace("T", " ").slice(0, 19) : "-"
+}
 
 async function load() {
   loading.value = true
