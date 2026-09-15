@@ -14,4 +14,5 @@ class SnCapture(Base):
     score = Column(Float, default=0.0)
     captured_at = Column(DateTime, nullable=True)      # SE9 抓拍时间
     source = Column(String(32), default="SE9")
+    side = Column(String(8), default="front", nullable=False)  # v2.1 正/反面: front|back; 旧数据默认 front
     uploaded_at = Column(DateTime, default=datetime.now)  # 入库时间

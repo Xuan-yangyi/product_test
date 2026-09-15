@@ -8,6 +8,7 @@ export interface CaptureItem {
   uploaded_at: string | null
   image_path: string
   image_url: string
+  side?: 'front' | 'back'          // v2.1 正/反面; 旧后端不返回时为 undefined, 视作 front
 }
 
 export const captureApi = {

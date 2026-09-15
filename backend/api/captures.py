@@ -36,12 +36,16 @@ async def upload_capture(
     sn: str = Form(""),
     score: float = Form(0.0),
     ts: str = Form(""),
+    side: str = Form("front"),                       # v2.1 正/反面; SE9 uploader 带上, 旧客户端不带默认 front
     image: UploadFile = File(...),
 ):
     """接收 SE9 上传的 SN + 命中图，落盘 + 入库。"""
     sn = (sn or "").strip()
     if not sn:
         raise HTTPException(status_code=400, detail="sn 不能为空")
+    side = (side or "front").strip().lower()
+    if side not in ("front", "back"):
+        side = "front"                               # 未知值兜底为 front, 不 400(容错优先)
     if image.content_type not in _ALLOWED_CT:
         raise HTTPException(status_code=400, detail=f"仅支持图片: {_ALLOWED_CT}")
 
@@ -54,14 +58,14 @@ async def upload_capture(
     captured_at = parse_ts(ts)
     stamp = (captured_at or datetime.now()).strftime("%Y%m%d_%H%M%S")
     ext = ".png" if image.content_type == "image/png" else ".jpg"
-    rel = Path("sn_captures") / sn / f"{stamp}{ext}"
+    rel = Path("sn_captures") / sn / f"{stamp}_{side}{ext}"   # v2.1 带 side, 正反同秒不覆盖
     abs_path = Config.DATA_DIR / rel
     abs_path.parent.mkdir(parents=True, exist_ok=True)
     abs_path.write_bytes(data)
 
     svc = get_service()
     return svc.add(sn=sn, image_path=str(rel), score=score,
-                   captured_at=captured_at, source="SE9")
+                   captured_at=captured_at, source="SE9", side=side)   # v2.1 落 side
 
 
 @router.get("/captures")

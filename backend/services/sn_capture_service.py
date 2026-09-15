@@ -13,11 +13,12 @@ class SnCaptureService:
         self._session_factory = create_session_factory()
 
     def add(self, sn: str, image_path: str, score: float,
-            captured_at: Optional[datetime], source: str = "SE9") -> dict:
+            captured_at: Optional[datetime], source: str = "SE9",
+            side: str = "front") -> dict:            # v2.1 加 side, 默认 front 向后兼容
         session = self._session_factory()
         try:
             row = SnCapture(sn=sn, image_path=image_path, score=score or 0.0,
-                            captured_at=captured_at, source=source)
+                            captured_at=captured_at, source=source, side=side)  # v2.1 落 side
             session.add(row)
             session.commit()
             return {"id": row.id, "sn": row.sn, "image_path": row.image_path}
@@ -62,4 +63,5 @@ class SnCaptureService:
             "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
             "image_path": r.image_path,
             "source": r.source,
+            "side": r.side,                          # v2.1 前端配对用
         }
