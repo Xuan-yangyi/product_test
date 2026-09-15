@@ -138,11 +138,16 @@ SE9 识别到设备 SN 时，把 **SN + 命中帧设备图**推送到本系统�
 **SN + 入库日期范围**查询并查看对应设备图。该特性完全加法式，独立于老化测试（不改
 `db_models.py` / `TestRecord` / 老化视图）。
 
+> **v2.1 正/反两面**：SE9 侧可再加一路背面摄像头，一次命中同时抓正、背两张图（同一
+> `captured_at`）。上传时多带一个 `side` 字段（`front` / `back`），DB 一行一图，前端按
+> `(sn, captured_at)` 归组、**一张卡片并排显示正/背**。旧客户端不带 `side` 也能传，默认按
+> 正面处理，完全向后兼容。
+
 ### 图片与数据的落盘位置 / 形式
 
 | 内容 | 路径 / 形式 |
 |------|-------------|
-| 图片文件 | `data/sn_captures/<SN>/<时间戳>.<jpg\|png>`（按 SN 分目录，一张一文件） |
+| 图片文件 | `data/sn_captures/<SN>/<时间戳>_<side>.<jpg\|png>`（按 SN 分目录，一张一文件；`side` 为 `front`/`back`，同一命中正反同秒也不会互相覆盖） |
 | 数据库 | `data/results.db`（与老化共用同一 SQLite），独立表 **`sn_captures`** |
 | DB 中的图片引用 | 表字段 `image_path` 只存**相对 DATA_DIR 的路径**，取图接口据此拼绝对路径返回文件 |
 
@@ -156,13 +161,22 @@ SE9 识别到设备 SN 时，把 **SN + 命中帧设备图**推送到本系统�
 | `score` | 识别置信度 |
 | `captured_at` | SE9 实际抓拍时间（板子时钟，可能为空） |
 | `source` | 来源，默认 `SE9` |
+| `side` | v2.1 正/反面：`front` \| `back`，默认 `front`（旧数据/旧客户端不带即正面） |
 | `uploaded_at` | 入库时间（服务器时钟，自动，永不为空）——**日期范围筛选即按此字段** |
+
+> ⚠️ **升级已有部署时需一次性补列**：`side` 是新增列，而 SQLAlchemy 的 `create_all` **只建表不做 ALTER**，
+> 已有 `data/results.db` 不会自动多出这一列，接口会报 `no such column: sn_captures.side`。升级步骤：
+> ```bash
+> cp data/results.db data/results.db.bak_$(date +%Y%m%d_%H%M%S)   # 先备份
+> sqlite3 data/results.db "ALTER TABLE sn_captures ADD COLUMN side VARCHAR(8) NOT NULL DEFAULT 'front';"
+> ```
+> 已存在的行会取默认值 `front`，正好等价于"老数据都是正面"，无需回填。
 
 ### 相关 API（均为新增，加法式）
 
 | 路径 | 方法 | 说明 |
 |------|------|------|
-| `/api/v1/captures` | POST | SE9 上传：multipart `sn`(必填)、`score`、`ts`、`image`(jpeg/png, <20MB) |
+| `/api/v1/captures` | POST | SE9 上传：multipart `sn`(必填)、`score`、`ts`、`side`(v2.1，`front`/`back`，缺省 `front`；未知值兜底 `front` 不报错)、`image`(jpeg/png, <20MB) |
 | `/api/v1/captures` | GET | 查询：`sn`、`start`/`end`(入库日期 YYYY-MM-DD，含当天)、`limit`、`offset`；返回 `{total, items[...image_url, uploaded_at]}` |
 | `/api/v1/captures/{id}/image` | GET | 返回该条抓拍的设备图文件 |
 
