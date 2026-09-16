@@ -9,6 +9,7 @@ from .api.results import router as results_router
 from .api.captures import router as captures_router
 from .api.cluster_api import router as cluster_router
 from .api.ai_api import router as ai_router
+from .api.camera import router as camera_router
 
 app = FastAPI(title="Athena2 Product Test", version="2.0.0")
 
@@ -31,6 +32,7 @@ app.include_router(ws_router)
 app.include_router(config_router)
 app.include_router(results_router)
 app.include_router(captures_router)
+app.include_router(camera_router)
 
 @app.get("/api/health")
 async def health_check():

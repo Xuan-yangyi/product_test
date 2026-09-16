@@ -34,6 +34,12 @@ const router = createRouter({
       meta: { title: 'SN 抓拍' },
     },
     {
+      path: '/camera-preview',
+      name: 'camera-preview',
+      component: () => import('@/views/CameraPreviewView.vue'),
+      meta: { title: '调机预览' },
+    },
+    {
       path: '/devices',
       name: 'devices',
       component: () => import('@/views/DeviceManageView.vue'),

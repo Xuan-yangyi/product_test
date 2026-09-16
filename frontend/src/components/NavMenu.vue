@@ -25,6 +25,10 @@
       <el-icon><Picture /></el-icon>
       <span>SN 抓拍</span>
     </el-menu-item>
+    <el-menu-item index="/camera-preview">
+      <el-icon><VideoCamera /></el-icon>
+      <span>调机预览</span>
+    </el-menu-item>
     <el-menu-item index="/devices">
       <el-icon><Monitor /></el-icon>
       <span>设备管理</span>
@@ -43,7 +47,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { HomeFilled, Document, Monitor, Setting, Plus, Connection, Picture } from '@element-plus/icons-vue'
+import { HomeFilled, Document, Monitor, Setting, Plus, Connection, Picture, VideoCamera } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const activeRoute = computed(() => {
