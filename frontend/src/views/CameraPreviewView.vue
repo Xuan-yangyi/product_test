@@ -2,23 +2,9 @@
   <div class="camera-preview">
     <!-- ① 顶部：档位 + 状态 + 调节完成 -->
     <div class="toolbar">
-      <span class="label">分辨率</span>
-      <el-select v-model="res" style="width: 210px" @change="onResChange">
-        <el-option v-for="o in RES_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
-      </el-select>
-      <span class="hint">{{ curResHint }}</span>
-
-      <el-divider direction="vertical" />
-
-      <el-tag v-for="c in cameras" :key="c.name" :type="tagType(c.state)" effect="dark" size="small">
-        {{ sideLabel(c.name) }}：{{ stateLabel(c.state) }}
-      </el-tag>
-      <span class="hint" v-if="fps">编码上限 {{ fps }} fps（识别不受此值影响）</span>
-
       <div class="spacer" />
 
-      <el-button @click="reloadStreams">重连画面</el-button>
-      <el-button type="success" @click="finishDialog = true">调节帮助</el-button>
+            <el-button type="success" @click="finishDialog = true">调节帮助</el-button>
     </div>
 
     <!-- ② 双路实时画面 (WebRTC) -->
