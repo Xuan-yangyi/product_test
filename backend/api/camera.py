@@ -132,9 +132,14 @@ async def camera_stream(
 
         改 async 后，取消能在 await 点立刻投递，finally 才会真的跑。
         """
+        _relay_bytes = 0
+        _RELAY_MAX_BYTES = 60_000_000
         try:
             async for chunk in upstream.aiter_raw():
                 yield chunk
+                _relay_bytes += len(chunk)
+                if _relay_bytes > _RELAY_MAX_BYTES:
+                    break
         except httpx.HTTPError as e:  # 上游中断不该污染日志栈
             logger.warning("预览流中断 cam=%s: %s", cam, e)
         finally:
@@ -238,3 +243,40 @@ def camera_latest_capture_image():
         )
     finally:
         client.close()
+
+# ============================================================
+# V4.0 WebRTC preview endpoints (WHEP proxy)
+# ============================================================
+
+WEBRTC_BOARD = os.environ.get("WEBRTC_BOARD_BASE", "http://127.0.0.1:8889")
+
+@router.get("/webrtc/config")
+def webrtc_config():
+    return {
+        "boardUrl": WEBRTC_BOARD,
+        "cams": ["front", "back"],
+        "iceUdpPort": 8189,
+        "mode": "whep",
+    }
+
+@router.api_route("/webrtc/whep/{cam}", methods=["POST", "OPTIONS"])
+async def webrtc_whep(cam: str, request: Request):
+    if cam not in ("cam_front", "cam_back"):
+        raise HTTPException(status_code=400, detail=f"unknown cam: {cam}")
+    sdp_offer = await request.body()
+    if not sdp_offer:
+        raise HTTPException(status_code=400, detail="empty SDP offer")
+    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as client:
+        try:
+            resp = await client.post(
+                f"{WEBRTC_BOARD}/{cam}/whep",
+                content=sdp_offer,
+                headers={"Content-Type": "application/sdp"},
+            )
+            return Response(
+                content=resp.content,
+                media_type=resp.headers.get("content-type", "application/sdp"),
+                status_code=resp.status_code,
+            )
+        except httpx.ConnectError as e:
+            raise HTTPException(status_code=503, detail="MediaMTX board unreachable") from e

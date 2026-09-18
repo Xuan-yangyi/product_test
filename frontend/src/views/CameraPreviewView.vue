@@ -21,43 +21,20 @@
       <el-button type="success" @click="finishDialog = true">调节帮助</el-button>
     </div>
 
-    <!-- ② 双路画面 -->
+    <!-- ② 双路实时画面 (WebRTC) -->
     <div class="boards">
-      <el-card v-for="c in cameras" :key="c.name" shadow="never" class="board-card">
+      <el-card v-for="s in ['front','back']" :key="'wr-'+s" shadow="never" class="board-card">
         <template #header>
           <div class="card-head">
-            <span class="title">
-              {{ sideLabel(c.name) }}
-              <el-tag size="small" :type="c.name === 'front' ? 'success' : 'info'" effect="plain">
-                {{ c.name === 'front' ? '识别中' : '仅预览' }}
-              </el-tag>
+            <span class="title">{{ sideLabel(s) }}
+              <el-tag size="small" :type="s==='front'?'success':'info'" effect="plain">{{ s==='front'?'识别中':'仅预览' }}</el-tag>
             </span>
-            <el-tag :type="tagType(viewState(c))" size="small">{{ stateLabel(viewState(c)) }}</el-tag>
           </div>
         </template>
-
         <div class="frame-wrap">
-          <!-- MJPEG 用 <img> 直接放，浏览器原生支持，无需 JS 解码。
-               source_ok 才建流：相机没起来时 <img> 会卡在连接上，白等一场。 -->
-          <img v-if="viewState(c) === 'running' && !failed.has(c.name)"
-               :src="streamUrl(c.name, res, tick)" class="frame"
-               :alt="sideLabel(c.name) + '实时画面'" @error="onImgError(c.name)" />
-          <div v-else class="frame placeholder">
-            <div>
-              <p class="ph-main">{{ stateLabel(viewState(c)) }}</p>
-              <p class="ph-sub" v-if="c.err">{{ c.err }}</p>
-              <p class="ph-sub" v-else-if="failed.has(c.name)">画面断开，正在自动重连…</p>
-              <p class="ph-sub" v-else>等板子预览服务连上相机…</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="meta">
-          <span>已收 {{ c.frames }} 帧</span>
-          <span v-if="c.age !== null">最近一帧 {{ c.age.toFixed(1) }}s 前</span>
-          <span v-if="c.size[0]">{{ c.size[0] }}×{{ c.size[1] }}</span>
-          <span v-else>3840×2160（原始）</span>
-          <span v-if="c.avg_ms">编码 {{ c.avg_ms }}ms</span>
+          <div v-if="webrtcConnecting&&s==='front'" class="frame placeholder" style="position:absolute;z-index:1;background:rgba(0,0,0,0.85);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none">
+            <div style="text-align:center"><p class="ph-main" style="color:#fff">WebRTC 连接中...</p><p class="ph-sub" style="color:#aaa">首次可能需要 5~10 秒</p></div></div>
+          <video :ref="el=>setVideoRef(s,el)" autoplay playsinline muted class="frame" />
         </div>
       </el-card>
     </div>
@@ -153,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
@@ -163,6 +140,29 @@ import {
 } from '@/api/camera'
 
 const router = useRouter()
+
+// V4.0 WebRTC
+const pcMap = new Map()
+const videoRefs = new Map()
+const webrtcConnecting = ref(true)
+
+function setVideoRef(c, el) { if (el) videoRefs.set(c, el) }
+function stopWebRTC(c) { const p=pcMap.get(c); if(p){p.close();pcMap.delete(c)} const v=videoRefs.get(c); if(v)v.srcObject=null }
+async function startWebRTC(c, u, delay) {
+ if(delay>0) await new Promise(r=>setTimeout(r,delay))
+ stopWebRTC(c)
+ const pc=new RTCPeerConnection({iceServers:[]}); pcMap.set(c,pc); pc.addTransceiver('video',{direction:'recvonly'})
+ pc.oniceconnectionstatechange=()=>{ const s=pc.iceConnectionState; if(s==='failed'||s==='disconnected'){console.warn('WebRTC '+c+' retry');stopWebRTC(c);startWebRTC(c,u,3000)} }
+ pc.ontrack=(ev)=>{ const v=videoRefs.get(c); if(v&&ev.streams[0]){v.srcObject=ev.streams[0];if(c==='front')webrtcConnecting.value=false} }
+ try{ const o=await pc.createOffer(); await pc.setLocalDescription(o)
+  await new Promise(r=>{if(pc.iceGatheringState==='complete')r();else{const ck=()=>{if(pc.iceGatheringState==='complete')r();else setTimeout(ck,200)};ck()}})
+  const r=await fetch('/api/v1/camera/webrtc/whep/cam_'+c,{method:'POST',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp})
+  if(!r.ok)throw new Error('WHEP '+r.status); await pc.setRemoteDescription({type:'answer',sdp:await r.text()})
+  console.log('WebRTC '+c+' connected')
+ }catch(e){console.warn('WebRTC '+c+':',e);stopWebRTC(c);startWebRTC(c,u,3000)} }
+async function initWebRTC(){ try{ const cfg=await(await fetch('/api/v1/camera/webrtc/config')).json()
+ for(const cn of cfg.cams) startWebRTC(cn,cfg.boardUrl, cn==='front'?1000:2000) }catch(e){console.error('WebRTC init:',e)} }
+
 
 const res = ref<CamRes>('1080p')       // 默认 1080p：4K 单路 84Mbps、编码限速 5.7fps，
                                        // 观感延迟约 1.5-2s；1080p 约 1s，细节仍够核对 SN。
@@ -318,6 +318,7 @@ async function pollCapture() {
 }
 
 onMounted(async () => {
+  initWebRTC()
   // 首次立刻建流：tick 变化会让 <img> 开始拉
   tick.value++
   await poll()

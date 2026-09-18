@@ -1,0 +1,14 @@
+rtmp: yes
+rtmpAddress: :1935
+webrtc: yes
+webrtcAddress: :8889
+api: yes
+srt: no
+logLevel: info
+paths:
+  cam_front:
+    source: publisher
+    sourceOnDemand: no
+  cam_back:
+    source: publisher
+    sourceOnDemand: no
