@@ -3,6 +3,7 @@
     <!-- ① 顶部：档位 + 状态 + 调节完成 -->
     <div class="toolbar">
       <div class="spacer" />
+      <span class="hint">子码流 768×572 · WebRTC 实时</span>
 
             <el-button type="success" @click="finishDialog = true">调节帮助</el-button>
     </div>
@@ -20,7 +21,7 @@
         <div class="frame-wrap">
           <div v-if="webrtcConnecting&&s==='front'" class="frame placeholder" style="position:absolute;z-index:1;background:rgba(0,0,0,0.85);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none">
             <div style="text-align:center"><p class="ph-main" style="color:#fff">WebRTC 连接中...</p><p class="ph-sub" style="color:#aaa">首次可能需要 5~10 秒</p></div></div>
-          <video :ref="el=>setVideoRef(s,el)" autoplay playsinline muted class="frame" />
+          <video :ref="el=>setVideoRef(s,el)" autoplay playsinline muted class="frame" @click="toggleFullscreen(s)" style="cursor:pointer" title="点击全屏" />
         </div>
       </el-card>
     </div>
@@ -69,6 +70,7 @@
         </div>
 
         <div class="spacer" />
+      <span class="hint">子码流 768×572 · WebRTC 实时</span>
         <span class="cap-sub">点击缩略图放大 · 每 2s 自动刷新</span>
       </div>
     </el-card>
