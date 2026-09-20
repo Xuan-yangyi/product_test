@@ -18,6 +18,10 @@
             </span>
           </div>
         </template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
         <div class="frame-wrap">
           <div v-if="webrtcConnecting&&s==='front'" class="frame placeholder" style="position:absolute;z-index:1;background:rgba(0,0,0,0.85);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none">
             <div style="text-align:center"><p class="ph-main" style="color:#fff">WebRTC 连接中...</p><p class="ph-sub" style="color:#aaa">首次可能需要 5~10 秒</p></div></div>
@@ -43,6 +47,10 @@
           <template #error>
             <div class="cap-thumb-empty">取图失败</div>
           </template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
         </el-image>
         <div v-else class="cap-thumb cap-thumb-empty">暂无</div>
 
@@ -59,14 +67,26 @@
                   本卡片只读板子上的文件，<b>不写数据库</b>，所以产测页「SN 抓拍」<br />
                   看到的仍是 uploader 正式上传后的记录（约 5s 延迟）。
                 </template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
                 <el-icon class="cap-help"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
           </template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
           <template v-else>
             <div class="cap-sub">板子上还没有已配对的抓拍图</div>
             <div class="cap-sub">镜头调好后识别到 SN 会自动出现在这里</div>
           </template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
         </div>
 
         <div class="spacer" />
@@ -79,6 +99,10 @@
     <el-dialog v-model="finishDialog" title="调节帮助" width="620px">
       <el-alert type="success" :closable="false" show-icon style="margin-bottom: 14px">
         <template #title>识别已在后台同步运行，无需任何切换</template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
         V3.0 的预览与识别在<b>同一个进程</b>里，共享同一路相机解码 ——
         相机源仍只有一条连接。调镜头时识别照常在跑，抓到 SN 下方即出现图片。
       </el-alert>
@@ -101,6 +125,10 @@
 
       <el-alert type="warning" :closable="false" style="margin-top: 10px">
         <template #title>万一预览影响识别：一键回退</template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
         在板子上给识别服务加 <code>--no-preview</code> 参数重启，即退回纯识别行为。
       </el-alert>
 
@@ -113,9 +141,17 @@
         <el-button @click="finishDialog = false">返回继续调机</el-button>
         <el-button type="primary" @click="goSnCapture">去「SN 抓拍」看结果</el-button>
       </template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.preview-video { filter: brightness(0.9) contrast(1.05); }
+</style>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
