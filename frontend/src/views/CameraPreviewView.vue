@@ -2,6 +2,12 @@
   <div class="camera-preview">
     <!-- ① 顶部：档位 + 状态 + 调节完成 -->
     <div class="toolbar">
+      <span class="label">亮度</span>
+      <input type="range" v-model.number="brightness" min="0.5" max="1.5" step="0.05" style="width:100px;vertical-align:middle" />
+      <span class="hint">{{ brightness.toFixed(2) }}</span>
+      <span class="label" style="margin-left:12px">对比度</span>
+      <input type="range" v-model.number="contrast" min="0.5" max="1.5" step="0.05" style="width:100px;vertical-align:middle" />
+      <span class="hint">{{ contrast.toFixed(2) }}</span>
       <div class="spacer" />
       <span class="hint">子码流 768×572 · WebRTC 实时</span>
 
@@ -25,7 +31,7 @@
         <div class="frame-wrap">
           <div v-if="webrtcConnecting&&s==='front'" class="frame placeholder" style="position:absolute;z-index:1;background:rgba(0,0,0,0.85);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none">
             <div style="text-align:center"><p class="ph-main" style="color:#fff">WebRTC 连接中...</p><p class="ph-sub" style="color:#aaa">首次可能需要 5~10 秒</p></div></div>
-          <video :ref="el=>setVideoRef(s,el)" autoplay playsinline muted class="frame" @click="toggleFullscreen(s)" style="cursor:pointer" title="点击全屏" />
+          <video :ref="el=>setVideoRef(s,el)" autoplay playsinline muted class="frame" :style="videoFilter" @click="toggleFullscreen(s)" style="cursor:pointer" title="点击全屏" />
         </div>
       </el-card>
     </div>
@@ -89,7 +95,13 @@
 </style>
         </div>
 
-        <div class="spacer" />
+        <span class="label">亮度</span>
+      <input type="range" v-model.number="brightness" min="0.5" max="1.5" step="0.05" style="width:100px;vertical-align:middle" />
+      <span class="hint">{{ brightness.toFixed(2) }}</span>
+      <span class="label" style="margin-left:12px">对比度</span>
+      <input type="range" v-model.number="contrast" min="0.5" max="1.5" step="0.05" style="width:100px;vertical-align:middle" />
+      <span class="hint">{{ contrast.toFixed(2) }}</span>
+      <div class="spacer" />
       <span class="hint">子码流 768×572 · WebRTC 实时</span>
         <span class="cap-sub">点击缩略图放大 · 每 2s 自动刷新</span>
       </div>
@@ -164,6 +176,9 @@ import {
 } from '@/api/camera'
 
 const router = useRouter()
+const brightness = ref(0.9)
+const contrast = ref(1.05)
+const videoFilter = computed(() => ({ filter: "brightness(" + brightness.value + ") contrast(" + contrast.value + ")" }))
 
 // V4.0 WebRTC
 const pcMap = new Map()
