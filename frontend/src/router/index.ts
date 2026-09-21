@@ -5,9 +5,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: () => import('@/views/HomeView.vue'),
-      meta: { title: '产测首页' },
+      redirect: '/cluster-aging',
     },
     {
       path: '/test-config/:type',
@@ -43,13 +41,25 @@ const router = createRouter({
       path: '/cluster-aging',
       name: 'cluster-aging',
       component: () => import('@/views/ClusterAgingView.vue'),
-      meta: { title: '集群老化' },
+      meta: { title: '老化测试' },
+    },
+    {
+      path: '/interface-test',
+      name: 'interface-test',
+      component: () => import('@/views/InterfaceTestView.vue'),
+      meta: { title: '接口测试' },
     },
     {
       path: '/product-model/new',
       name: 'product-model-new',
       component: () => import('@/views/ProductModelCreateView.vue'),
       meta: { title: '新建产品型号' },
+    },
+    {
+      path: '/result-detail/:id',
+      name: 'result-detail',
+      component: () => import('@/views/ResultDetailView.vue'),
+      meta: { title: '测试详情' },
     },
   ],
 })

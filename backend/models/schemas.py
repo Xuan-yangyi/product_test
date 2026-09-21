@@ -104,6 +104,7 @@ class ClusterTestRequest(BaseModel):
     product_model: str = Field(..., description="产品型号")
     devices: List[ClusterDevice] = Field(..., description="设备列表")
     write_oem: bool = Field(False, description="是否写入OEM信息")
+    oem_profile: Optional[str] = Field(None, description="OEM 配置 profile 名称，用于 burn_oem 步骤")
 
 
 class ClusterTestResponse(BaseModel):

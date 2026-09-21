@@ -55,8 +55,8 @@ class ConfigService:
                             "label": self._get_type_label(key),
                             "description": self._get_type_description(key),
                             "product": self._get_product_type(key),
-                            "requires_serial": key != "se9_mac_check",
-                            "requires_network": "aging" in key,
+                            "requires_serial": False,
+                            "requires_network": True,
                         })
         return types
 
@@ -86,6 +86,54 @@ class ConfigService:
                     "enabled": value.strip() == "1",
                 })
         return cases
+
+    def update_test_case_enabled(self, test_type: str, case_name: str, enabled: bool) -> dict:
+        """更新测试用例的启用/禁用状态
+
+        直接写入 test_case_config.ini 文件。
+
+        Args:
+            test_type: 测试类型 key，如 se9_interface_test
+            case_name: 用例名称，如 4g_check
+            enabled: True 启用 / False 禁用
+
+        Returns:
+            {"case_name": "...", "enabled": True/False, "test_type": "..."}
+
+        Raises:
+            ValueError: section 或 case 不存在
+        """
+        section_name = TEST_TYPE_TO_SECTION.get(test_type, test_type)
+        cfg_path = Config.CFG_DIR / "test_case_config.ini"
+
+        parser = configparser.ConfigParser()
+        parser.optionxform = str
+        if cfg_path.exists():
+            parser.read(str(cfg_path), encoding="utf-8")
+        else:
+            raise ValueError(f"配置文件不存在: {cfg_path}")
+
+        # 查找匹配的 section
+        matched_section = None
+        for sec in parser.sections():
+            if sec.lower() == section_name.lower():
+                matched_section = sec
+                break
+
+        if not matched_section:
+            raise ValueError(f"测试类型不存在: {test_type} (section={section_name})")
+
+        if case_name not in parser[matched_section]:
+            raise ValueError(f"测试用例不存在: {case_name} (section={matched_section})")
+
+        new_value = "1" if enabled else "0"
+        parser.set(matched_section, case_name, new_value)
+
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            parser.write(f)
+
+        logger.info(f"更新测试用例: [{matched_section}] {case_name} = {new_value}")
+        return {"case_name": case_name, "enabled": enabled, "test_type": test_type}
 
     def get_product_models(self) -> list:
         """获取产品型号列表
@@ -175,8 +223,102 @@ class ConfigService:
                     logger.info(f"跳过 OEM 写入（未启用）")
                     continue
 
-            # 上传步骤：SFTP 上传 tgz 到设备，解压后删除 tgz
-            if name == "upload_aging_files":
+                oem_profile_name = task.get("params", {}).get("oem_profile", "")
+                if not oem_profile_name:
+                    logger.warning(f"未指定 oem_profile，跳过 OEM 写入")
+                    continue
+
+                def make_burn_oem_execute(case_name, profile_name):
+                    def execute(context):
+                        import os as _os4
+                        import re as _re4
+                        from ..config import Config as _Config4
+
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+                        ssh = context.get("ssh_client")
+                        if not ssh:
+                            logger.error(f"[{test_id}] burn_oem: 无 SSH 连接")
+                            return False
+
+                        _syslog_path = str(_Config4.LOG_DIR / f"syslog_{test_id}.log")
+
+                        def _push_log(msg):
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            logger.info(f"[{test_id}] {msg}")
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os4.makedirs(_os4.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    _lf.write(f"[{ts}] {msg}\n")
+                            except Exception:
+                                pass
+
+                        # 读取 profile 的 OEMconfig.ini
+                        oem_path = _Config4.CFG_DIR / "profiles" / profile_name / "OEMconfig.ini"
+                        if not oem_path.exists():
+                            _push_log(f"OEM 配置文件不存在: {oem_path}")
+                            return False
+
+                        with open(oem_path, "r", encoding="utf-8") as _f:
+                            oem_content = _f.read()
+
+                        # 解析 key=value 对（跳过 [section] 头和空行/注释）
+                        pairs = []
+                        for line in oem_content.splitlines():
+                            line = line.strip()
+                            if not line or line.startswith("#") or line.startswith("["):
+                                continue
+                            m = _re4.match(r'^(\w+)\s*=\s*(.+)$', line)
+                            if m:
+                                pairs.append((m.group(1), m.group(2).strip()))
+
+                        if not pairs:
+                            _push_log("OEM 配置文件中未找到有效的键值对")
+                            return False
+
+                        _push_log(f"开始 OEM 烧录（profile={profile_name}），共 {len(pairs)} 项")
+                        all_ok = True
+                        for key, value in pairs:
+                            cmd = f"./burn_oem.sh {key} {value}"
+                            _push_log(f"执行: {cmd}")
+                            try:
+                                stdout, stderr, code = ssh.exec_cmd(
+                                    cmd, timeout=120, sudo=True, sudo_password="linaro"
+                                )
+                                output = stdout + "\n" + stderr
+                                if "QA_PASS_OEM" in output:
+                                    _push_log(f"OEM 烧录成功: {key}={value}")
+                                elif "QA_FAIL_OEM" in output:
+                                    _push_log(f"OEM 烧录失败: {key}={value}")
+                                    all_ok = False
+                                else:
+                                    _push_log(f"OEM 烧录结果未知: {key}={value}, output={output[:200]}")
+                                    all_ok = False
+                            except Exception as e:
+                                _push_log(f"OEM 烧录异常: {key}={value}, {e}")
+                                all_ok = False
+
+                        if all_ok:
+                            _push_log("OEM 烧录全部完成")
+                        else:
+                            _push_log("OEM 烧录部分失败")
+                        return all_ok
+                    return execute
+
+                burn_oem_step = TestStep(
+                    name="burn_oem",
+                    label="烧录OEM",
+                    execute=make_burn_oem_execute("burn_oem", oem_profile_name),
+                    timeout=600,
+                    required=True,
+                )
+                steps.append(burn_oem_step)
+                continue
+
+            # 上传步骤：管道传输 tgz 到设备并解压（幂等：已存在且完整则跳过）
+            elif name == "upload_aging_files":
                 def make_upload_execute(case_name):
                     def execute(context):
                         ssh = context.get("ssh_client")
@@ -187,43 +329,109 @@ class ConfigService:
                         if not _os.path.exists(local_tgz):
                             logger.error(f"本地 tgz 文件不存在: {local_tgz}")
                             return False
-                        remote_tgz = "/data/athena2_soc_aging_v1_2_5.tgz"
-                        # 1. SFTP 上传 tgz 到设备
-                        logger.info(f"SFTP 上传 tgz: {local_tgz} -> {remote_tgz}")
-                        if not ssh.upload_file(local_tgz, remote_tgz):
-                            return False
-                        # 2. 在设备上解压
-                        logger.info("在设备上解压 tgz...")
-                        stdout, stderr, code = ssh.exec_cmd(
-                            f"tar -xzf {remote_tgz} -C /data",
-                            timeout=300, sudo=True, sudo_password="linaro"
-                        )
-                        if code != 0:
-                            logger.error(f"解压失败: {stderr}")
-                            return False
-                        # 3. 删除 tgz 释放空间
-                        logger.info("删除 tgz 释放空间...")
-                        ssh.exec_cmd(
-                            f"rm -f {remote_tgz}",
+
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+                        import os as _os2
+
+                        # 日志文件路径（仅写入系统日志，老化日志只显示老化程序输出）
+                        from ..config import Config as _Config
+                        _syslog_path = str(_Config.LOG_DIR / f"syslog_{test_id}.log")
+
+                        def _push_log(msg):
+                            """推送日志到 WebSocket 并写入系统日志文件"""
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            line = f"[{ts}] {msg}"
+                            logger.info(msg)
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os2.makedirs(_os2.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    _lf.write(line + "\n")
+                            except Exception:
+                                pass
+
+                        # 提取老化包版本号
+                        _tgz_basename = _os.path.basename(local_tgz)
+                        _version_match = __import__("re").search(r'v(\d+[_\d]*)', _tgz_basename)
+                        _aging_version = _version_match.group(1).replace("_", ".") if _version_match else "unknown"
+                        _push_log(f"老化测试版本: v{_aging_version}")
+
+                        # 1. 幂等性检查：比对本地 tgz 的 MD5 与设备上的部署标记文件
+                        _push_log("检查设备上是否已有老化文件...")
+                        import hashlib as _hashlib
+                        _push_log("计算本地老化包 MD5...")
+                        _local_md5 = ""
+                        with open(local_tgz, "rb") as _f:
+                            _m = _hashlib.md5()
+                            _chunk_size = 64 * 1024 * 1024  # 64MB 块读
+                            _total_read = 0
+                            while True:
+                                _chunk = _f.read(_chunk_size)
+                                if not _chunk:
+                                    break
+                                _m.update(_chunk)
+                                _total_read += len(_chunk)
+                            _local_md5 = _m.hexdigest()
+                        _push_log(f"本地老化包 MD5: {_local_md5}")
+
+                        # 检查设备上的部署标记文件
+                        stdout, _, _ = ssh.exec_cmd(
+                            "cat /data/soc_aging/.deploy_md5 2>/dev/null || echo NOT_FOUND",
                             timeout=10, sudo=True, sudo_password="linaro"
                         )
-                        # 4. 校验 MD5
-                        stdout, stderr, code = ssh.exec_cmd(
-                            'sh -c "cd /data/soc_aging && md5sum -c soc_aging.md5"',
-                            timeout=60, sudo=True, sudo_password="linaro"
+                        _remote_md5 = stdout.strip()
+                        if _remote_md5 and _remote_md5 != "NOT_FOUND":
+                            if _remote_md5 == _local_md5:
+                                _push_log("设备上老化文件完整且与本地一致，跳过上传（已就绪）")
+                                return True
+                            else:
+                                _push_log(f"设备上老化文件版本不匹配，将重新部署")
+                        else:
+                            _push_log("设备上尚无老化文件，开始部署")
+
+                        # 2. 管道传输 tgz → 远程 tar 解压（不占用设备磁盘空间）
+                        total_size = _os.path.getsize(local_tgz)
+                        file_size_mb = total_size / 1024**2
+                        _push_log(f"开始上传老化包 ({file_size_mb:.0f} MB)，通过管道直传解压...")
+
+                        def on_progress(sent, total):
+                            pct = int(sent / total * 100)
+                            _push_log(f"上传进度: {pct}% ({sent / 1024**2:.0f} / {total / 1024**2:.0f} MB)")
+
+                        # 使用 --no-same-owner 避免 tar 因权限不足失败，权限由后续 chmod 统一设置
+                        stdout, stderr, code = ssh.pipe_file_to_cmd(
+                            local_tgz,
+                            "tar -xzf - -C /data --no-same-owner",
+                            timeout=900,
+                            on_progress=on_progress,
                         )
-                        output = stdout + "\n" + stderr
-                        if "FAILED" in output or code != 0:
-                            logger.error(f"MD5 校验失败: {output}")
+                        if code != 0:
+                            _push_log(f"上传失败 (exit={code}): {stderr[:200]}")
                             return False
-                        # 5. 设置权限
+                        _push_log("老化包解压完成")
+
+                        # 3. 写入部署标记文件（用于后续快速幂等检查）
+                        _push_log("写入部署标记...")
+                        stdout, stderr, code = ssh.exec_cmd(
+                            f"echo '{_local_md5}' > /data/soc_aging/.deploy_md5",
+                            timeout=10, sudo=True, sudo_password="linaro"
+                        )
+                        if code != 0:
+                            _push_log(f"写入部署标记失败: {stderr}")
+                            return False
+
+                        # 4. 设置权限
+                        _push_log("设置文件权限...")
                         stdout, stderr, code = ssh.exec_cmd(
                             "chmod -R 755 /data/soc_aging",
                             timeout=30, sudo=True, sudo_password="linaro"
                         )
                         if code != 0:
-                            logger.error(f"权限设置失败: {stderr}")
+                            _push_log(f"权限设置失败: {stderr}")
                             return False
+                        _push_log("老化文件部署完成")
                         return True
                     return execute
 
@@ -231,7 +439,7 @@ class ConfigService:
                     name=name,
                     label=case["label"],
                     execute=make_upload_execute(name),
-                    timeout=600,
+                    timeout=900,
                     required=True,
                 )
             elif name == "run_aging_test":
@@ -244,7 +452,29 @@ class ConfigService:
                         params = context.get("params", {})
                         loop = params.get("loop", 0)
                         reboot = params.get("reboot", 0)
-                        chip_type = "bm1688"  # SE9 固定为 bm1688
+                        chip_type = params.get("chip_model", "bm1688")
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+
+                        import os as _os3
+                        from ..config import Config as _Config2
+                        _syslog_path = str(_Config2.LOG_DIR / f"syslog_{test_id}.log")
+
+                        def _push_syslog(msg):
+                            """推送日志到系统日志（老化日志只显示老化程序输出）"""
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            line = f"[{ts}] {msg}"
+                            logger.info(msg)
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os3.makedirs(_os3.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    _lf.write(line + "\n")
+                            except Exception:
+                                pass
+
+                        _push_syslog(f"启动老化测试: loop={loop}, reboot={reboot}, chip_type={chip_type}")
 
                         cmd = (
                             f"sh -c 'cd /data/soc_aging && "
@@ -256,9 +486,9 @@ class ConfigService:
                             cmd, timeout=30, sudo=True, sudo_password="linaro"
                         )
                         if "AGING_STARTED" in stdout:
-                            logger.info(f"老化测试已启动: loop={loop}, reboot={reboot}")
+                            _push_syslog("老化测试已成功启动，等待日志输出...")
                             return True
-                        logger.error(f"老化测试启动失败: {stderr}")
+                        _push_syslog(f"老化测试启动失败: {stderr[:200]}")
                         return False
                     return execute
 
@@ -283,7 +513,14 @@ class ConfigService:
                         ssh = context.get("ssh_client")
                         device_ip = context.get("device_ip", "")
                         test_id = context.get("test_id", "unknown")
+
+                        on_log = context.get("_on_log_callback")
+                        if on_log:
+                            on_log(test_id, "INFO", "syslog", f"[自定义] Monitor Aging 开始监控 (ssh={bool(ssh)}, ip={device_ip})")
+
                         if not ssh or not device_ip:
+                            if on_log:
+                                on_log(test_id, "ERROR", "syslog", f"[自定义] Monitor Aging 失败: ssh={bool(ssh)}, ip={bool(device_ip)}")
                             return False
 
                         # 本地日志文件路径
@@ -306,6 +543,24 @@ class ConfigService:
                         max_idle = 120  # 10 分钟无新日志视为异常
                         start_time = time.time()
                         max_duration = 86400 * 3  # 最长 3 天
+
+                        # 跳到 /data/aging.log 当前末尾，跳过旧测试的残留日志
+                        # 注意：不能使用 < 重定向，因为在 sudo 模式下
+                        # cmd 会被包装为 echo 'linaro' | sudo -S {cmd}，
+                        # < 重定向会应用到 echo 而非 wc
+                        try:
+                            chk, _, _ = ssh.exec_cmd(
+                                "stat -c%s /data/aging.log 2>/dev/null || echo 0", timeout=5,
+                                sudo=True, sudo_password="linaro"
+                            )
+                            remote_size = int(chk.strip())
+                            if remote_size > 0:
+                                aging_pos = remote_size
+                                if on_log:
+                                    on_log(test_id, "INFO", "aging",
+                                           f"跳过旧日志 {remote_size} 字节，从末尾开始监控")
+                        except (ValueError, Exception):
+                            pass
 
                         def read_remote_log(remote_path, last_pos, source, local_file, sudo=False):
                             """读取远程日志增量，返回 (new_pos, has_pass, has_fail)"""
@@ -352,12 +607,12 @@ class ConfigService:
                             try:
                                 if sudo:
                                     chk, _, _ = ssh.exec_cmd(
-                                        f"wc -c < {remote_path} 2>/dev/null || echo 0", timeout=5,
+                                        f"stat -c%s {remote_path} 2>/dev/null || echo 0", timeout=5,
                                         sudo=True, sudo_password="linaro"
                                     )
                                 else:
                                     chk, _, _ = ssh.exec_cmd(
-                                        f"wc -c < {remote_path} 2>/dev/null || echo 0", timeout=5
+                                        f"stat -c%s {remote_path} 2>/dev/null || echo 0", timeout=5
                                     )
                                 return int(chk.strip()) < last_pos
                             except (ValueError, Exception):
@@ -392,7 +647,7 @@ class ConfigService:
                             try:
                                 # 读取 aging.log
                                 aging_pos, has_pass, has_fail = read_remote_log(
-                                    "/data/aging.log", aging_pos, "aging", aging_log_file, sudo=False
+                                    "/data/aging.log", aging_pos, "aging", aging_log_file, sudo=True
                                 )
                                 if has_pass:
                                     logger.info("老化测试完成: PASS")
@@ -453,8 +708,30 @@ class ConfigService:
                     required=True,
                 )
             else:
-                def make_execute(case_name, sr):
+                def make_execute(case_name, sr, _case=case):
                     def execute(context):
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+                        label = _case.get("label", case_name)
+
+                        import os as _os3
+                        from ..config import Config as _Config3
+                        _syslog_path = str(_Config3.LOG_DIR / f"syslog_{test_id}.log")
+
+                        def _push_log(msg):
+                            """推送日志到系统日志（老化日志只显示老化程序输出）"""
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            line = f"[{ts}] {msg}"
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os3.makedirs(_os3.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    _lf.write(line + "\n")
+                            except Exception:
+                                pass
+
+                        _push_log(f"开始执行: {label}")
                         serial = context.get("serial_client")
                         ssh = context.get("ssh_client")
                         if serial:
@@ -462,8 +739,14 @@ class ConfigService:
                         elif ssh:
                             result = sr.run_ssh(ssh, case_name)
                         else:
+                            _push_log(f"失败: {label} — 无可用连接")
                             return False
-                        return result["result"] == "pass"
+                        ok = result["result"] == "pass"
+                        if ok:
+                            _push_log(f"完成: {label} — 通过 (耗时 {result.get('duration', 0):.1f}s)")
+                        else:
+                            _push_log(f"失败: {label} — {result.get('output', '')[:200]}")
+                        return ok
                     return execute
 
                 step = TestStep(
@@ -787,3 +1070,164 @@ class ConfigService:
 
     def _get_case_label(self, case_name: str) -> str:
         return case_name.replace("_", " ").title()
+
+    # ============================================================
+    #  Profile 管理（OEM 配置文件持久化）
+    # ============================================================
+
+    @property
+    def profiles_dir(self):
+        from ..config import Config
+        return Config.CFG_DIR / "profiles"
+
+    def _ensure_profiles_dir(self):
+        """确保 profiles 目录和 index.json 存在"""
+        import os as _os
+        _os.makedirs(self.profiles_dir, exist_ok=True)
+        index_path = self.profiles_dir / "index.json"
+        if not index_path.exists():
+            with open(index_path, "w") as f:
+                __import__("json").dump([], f)
+
+    def _load_profiles_index(self) -> list:
+        """加载 profile 索引"""
+        self._ensure_profiles_dir()
+        import json as _json
+        with open(self.profiles_dir / "index.json", "r") as f:
+            return _json.load(f)
+
+    def _save_profiles_index(self, profiles: list):
+        """保存 profile 索引"""
+        self._ensure_profiles_dir()
+        import json as _json
+        with open(self.profiles_dir / "index.json", "w") as f:
+            _json.dump(profiles, f, indent=2, ensure_ascii=False)
+
+    def list_profiles(self) -> list:
+        """列出所有 profile"""
+        return self._load_profiles_index()
+
+    def create_profile(self, name: str, oem_content: str) -> dict:
+        """创建新的 profile
+
+        Args:
+            name: profile 名称（如 SE9-16-BP1-18）
+            oem_content: OEMconfig.ini 文件内容（文本）
+        """
+        import os as _os
+        import re as _re
+        from datetime import datetime
+
+        if not name or not _re.match(r'^[A-Za-z0-9_\-]+$', name):
+            raise ValueError(f"无效的 profile 名称: {name}，仅支持字母、数字、下划线、连字符")
+        if not oem_content or not oem_content.strip():
+            raise ValueError("OEM 配置文件内容不能为空")
+
+        profiles = self._load_profiles_index()
+        for p in profiles:
+            if p["name"] == name:
+                raise ValueError(f"Profile '{name}' 已存在")
+
+        profile_dir = self.profiles_dir / name
+        _os.makedirs(profile_dir, exist_ok=True)
+        oem_path = profile_dir / "OEMconfig.ini"
+        with open(oem_path, "w", encoding="utf-8") as f:
+            f.write(oem_content)
+
+        product_model = ""
+        m = _re.search(r'PRODUCT\s*=\s*(\S+)', oem_content)
+        if m:
+            product_model = m.group(1)
+
+        now = datetime.now().isoformat()
+        entry = {
+            "name": name,
+            "product_model": product_model or (name.split("-")[0] if "-" in name else ""),
+            "created_at": now,
+            "updated_at": now,
+            "oem_size": len(oem_content.encode("utf-8")),
+        }
+        profiles.append(entry)
+        self._save_profiles_index(profiles)
+        logger.info(f"创建 Profile: {name}, product_model={product_model}")
+        return entry
+
+    def get_profile(self, name: str) -> dict:
+        """获取 profile 详情（含 OEM 文件内容）"""
+        import os as _os
+
+        profiles = self._load_profiles_index()
+        for p in profiles:
+            if p["name"] == name:
+                oem_path = self.profiles_dir / name / "OEMconfig.ini"
+                oem_content = ""
+                if oem_path.exists():
+                    with open(oem_path, "r", encoding="utf-8") as f:
+                        oem_content = f.read()
+                return {**p, "oem_content": oem_content}
+        raise ValueError(f"Profile '{name}' 不存在")
+
+    def update_profile_oem(self, name: str, oem_content: str) -> dict:
+        """更新 profile 的 OEM 配置文件"""
+        import os as _os
+        import re as _re
+        from datetime import datetime
+
+        if not oem_content or not oem_content.strip():
+            raise ValueError("OEM 配置文件内容不能为空")
+
+        profiles = self._load_profiles_index()
+        for p in profiles:
+            if p["name"] == name:
+                profile_dir = self.profiles_dir / name
+                if not profile_dir.exists():
+                    raise ValueError(f"Profile 目录不存在: {name}")
+                oem_path = profile_dir / "OEMconfig.ini"
+                with open(oem_path, "w", encoding="utf-8") as f:
+                    f.write(oem_content)
+
+                m = _re.search(r'PRODUCT\s*=\s*(\S+)', oem_content)
+                if m:
+                    p["product_model"] = m.group(1)
+                p["updated_at"] = datetime.now().isoformat()
+                p["oem_size"] = len(oem_content.encode("utf-8"))
+                self._save_profiles_index(profiles)
+                logger.info(f"更新 Profile OEM: {name}")
+                return p
+        raise ValueError(f"Profile '{name}' 不存在")
+
+    def delete_profile(self, name: str):
+        """删除 profile"""
+        import shutil
+        import os as _os
+
+        profiles = self._load_profiles_index()
+        new_profiles = [p for p in profiles if p["name"] != name]
+        if len(new_profiles) == len(profiles):
+            raise ValueError(f"Profile '{name}' 不存在")
+        self._save_profiles_index(new_profiles)
+
+        profile_dir = self.profiles_dir / name
+        if profile_dir.exists():
+            shutil.rmtree(profile_dir, ignore_errors=True)
+
+        logger.info(f"删除 Profile: {name}")
+
+    def update_profile_test_options(self, name: str, test_options: dict) -> dict:
+        """更新 profile 的测试选项
+
+        Args:
+            name: profile 名称
+            test_options: 测试选项字典，如 {"burn_emmc": True, "chip_type_check": False}
+        """
+        from datetime import datetime
+
+        profiles = self._load_profiles_index()
+        for p in profiles:
+            if p["name"] == name:
+                p["test_options"] = test_options
+                p["updated_at"] = datetime.now().isoformat()
+                self._save_profiles_index(profiles)
+                logger.info(f"更新 Profile 测试选项: {name}, options={len(test_options)}")
+                return p
+        raise ValueError(f"Profile '{name}' 不存在")

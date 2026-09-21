@@ -33,6 +33,7 @@ async def create_cluster_test(
             product_model=req.product_model,
             devices=[d.model_dump() for d in req.devices],
             write_oem=req.write_oem,
+            oem_profile=req.oem_profile,
         )
         return cluster
     except Exception as e:
@@ -67,6 +68,32 @@ async def stop_cluster_test(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/tests/cluster/{cluster_id}/resume")
+async def resume_cluster_test(
+    cluster_id: str,
+    cm: ClusterManager = Depends(get_cluster_manager),
+):
+    """恢复中断的集群测试（重新连接 SSH 并启动监控）"""
+    try:
+        await cm.resume_cluster(cluster_id)
+        return {"cluster_id": cluster_id, "status": "running"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/tests/cluster/{cluster_id}")
+async def delete_cluster_test(
+    cluster_id: str,
+    cm: ClusterManager = Depends(get_cluster_manager),
+):
+    """删除集群测试"""
+    try:
+        cm.delete_cluster(cluster_id)
+        return {"cluster_id": cluster_id, "status": "deleted"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("/tests/cluster/{cluster_id}")
 async def get_cluster(
     cluster_id: str,
@@ -90,50 +117,15 @@ async def list_clusters(
 @router.get("/tests/{test_id}/temperature")
 async def get_temperature_data(test_id: str):
     """获取温度数据（从 aging log 解析）"""
-    import re
-    log_file = Config.LOG_DIR / f"aging_{test_id}.log"
-    if not log_file.exists():
-        return {"data": [], "message": "日志文件不存在"}
-
-    data = []
-    try:
-        with open(log_file) as f:
-            for line in f:
-                match = re.search(r"chip temp: (\d+)", line)
-                time_match = re.search(r"current time: ([\d\-: ]+)", line)
-                if match and time_match:
-                    data.append({
-                        "time": time_match.group(1).strip(),
-                        "temp": round(int(match.group(1)) / 1000.0, 1),
-                    })
-    except Exception as e:
-        return {"data": [], "error": str(e)}
-
-    return {"data": data}
+    from ..services.log_parser import parse_temperature
+    return parse_temperature(test_id, Config.LOG_DIR)
 
 
 @router.get("/tests/{test_id}/loop-timing")
 async def get_loop_timing(test_id: str):
-    """获取每轮时间分布"""
-    import re
-    log_file = Config.LOG_DIR / f"aging_{test_id}.log"
-    if not log_file.exists():
-        return {"data": [], "message": "日志文件不存在"}
-
-    data = []
-    try:
-        with open(log_file) as f:
-            for line in f:
-                match = re.search(r"aging test loop (\d+) done, use (\d+)", line)
-                if match:
-                    data.append({
-                        "loop": int(match.group(1)),
-                        "duration": int(match.group(2)),
-                    })
-    except Exception as e:
-        return {"data": [], "error": str(e)}
-
-    return {"data": data}
+    """获取每轮时间分布（含运行中状态和重启检测）"""
+    from ..services.log_parser import parse_loop_timing
+    return parse_loop_timing(test_id, Config.LOG_DIR)
 
 
 MODULE_NAMES = ["cpu", "dpu", "jpu", "tpu", "vpss_convertto", "vpss_csc", "vpu_dec", "vpu_enc"]

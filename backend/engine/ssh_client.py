@@ -74,10 +74,19 @@ class SSHClient:
 
         try:
             stdin, stdout, stderr = self._client.exec_command(cmd, timeout=timeout)
+            # 显式设置 channel timeout 以确保 recv_exit_status 超时生效
+            stdout.channel.settimeout(timeout)
             exit_code = stdout.channel.recv_exit_status()
-            return stdout.read().decode(errors="ignore"), stderr.read().decode(errors="ignore"), exit_code
+            stdout_str = stdout.read().decode(errors="ignore")
+            stderr_str = stderr.read().decode(errors="ignore")
+            return stdout_str, stderr_str, exit_code
         except Exception as e:
             logger.error(f"SSH 执行命令失败 [{self.ip}]: {e}")
+            # 尝试关闭 channel 终止远程命令
+            try:
+                stdout.channel.close()
+            except Exception:
+                pass
             return "", str(e), -1
 
     def open_sftp(self) -> Optional[paramiko.SFTPClient]:
@@ -89,7 +98,8 @@ class SSHClient:
         self._sftp = self._client.open_sftp()
         return self._sftp
 
-    def pipe_file_to_cmd(self, local_file: str, remote_cmd: str, timeout: int = 600) -> tuple:
+    def pipe_file_to_cmd(self, local_file: str, remote_cmd: str, timeout: int = 600,
+                         on_progress: callable = None) -> tuple:
         """将本地文件通过 stdin 管道传输到远程命令（不占用磁盘空间）
 
         用于场景：本地上传 tgz 并通过 tar 解压，无需在设备上存储 tgz 文件。
@@ -98,6 +108,7 @@ class SSHClient:
             local_file: 本地文件路径
             remote_cmd: 远程命令（从 stdin 读取数据）
             timeout: 超时时间（秒）
+            on_progress: 进度回调，签名: (bytes_sent: int, total_bytes: int) -> None
 
         Returns:
             (stdout: str, stderr: str, exit_code: int)
@@ -105,22 +116,33 @@ class SSHClient:
         if not self.is_connected:
             raise RuntimeError(f"SSH 未连接到 {self.ip}")
 
+        import os as _os
+        total_bytes = _os.path.getsize(local_file)
+
         try:
             stdin, stdout, stderr = self._client.exec_command(remote_cmd, timeout=timeout)
             with open(local_file, "rb") as f:
                 chunk_size = 1024 * 1024  # 1MB chunks
                 total = 0
+                last_report_mb = 0
                 while True:
                     chunk = f.read(chunk_size)
                     if not chunk:
                         break
                     stdin.write(chunk)
                     total += len(chunk)
-                    if total % (500 * 1024 * 1024) < chunk_size:
-                        logger.info(f"管道传输进度: {total / 1024**2:.0f} MB")
+                    # 每 100MB 报告一次进度
+                    current_mb = total // (100 * 1024 * 1024)
+                    if current_mb > last_report_mb:
+                        last_report_mb = current_mb
+                        logger.info(f"管道传输进度: {total / 1024**2:.0f} MB / {total_bytes / 1024**2:.0f} MB")
+                        if on_progress:
+                            on_progress(total, total_bytes)
             stdin.close()
             stdin.channel.shutdown_write()
             logger.info(f"管道传输完成: {total / 1024**2:.0f} MB")
+            if on_progress:
+                on_progress(total, total_bytes)
             exit_code = stdout.channel.recv_exit_status()
             stdout_str = stdout.read().decode(errors="ignore")
             stderr_str = stderr.read().decode(errors="ignore")

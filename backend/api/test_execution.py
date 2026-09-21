@@ -74,10 +74,34 @@ async def get_test(test_id: str, tm: TestManager = Depends(get_test_manager)):
     task = tm.get_test(test_id)
     if not task:
         raise HTTPException(status_code=404, detail="测试任务不存在")
-    return task
+    return tm._clean_task(task)
 
 
 @router.get("/tests")
 async def list_tests(tm: TestManager = Depends(get_test_manager)):
     """获取所有测试任务"""
     return {"tests": tm.get_all_tests()}
+
+
+@router.get("/tests/{test_id}/loop-timing")
+async def get_loop_timing(test_id: str):
+    """获取老化测试每轮耗时数据"""
+    from ..services.log_parser import parse_loop_timing
+    from ..config import Config
+    return parse_loop_timing(test_id, Config.LOG_DIR)
+
+
+@router.get("/tests/{test_id}/temperature")
+async def get_temperature(test_id: str):
+    """获取老化测试温度变化数据"""
+    from ..services.log_parser import parse_temperature
+    from ..config import Config
+    return parse_temperature(test_id, Config.LOG_DIR)
+
+
+@router.get("/tests/{test_id}/module-log/{module}")
+async def get_module_log(test_id: str, module: str):
+    """获取老化测试指定模块的日志"""
+    from ..services.log_parser import filter_module_log
+    from ..config import Config
+    return filter_module_log(test_id, module, Config.LOG_DIR)

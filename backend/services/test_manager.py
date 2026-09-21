@@ -28,7 +28,6 @@ class TestManager:
         self._tests: Dict[str, dict] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._loop = None  # 主事件循环引用，由 start_test 延迟设置
-        self._load_existing_tests()
 
     async def create_test(self, test_type: str, product_model: str,
                           serial_port: str = None, device_ip: str = None,
@@ -53,7 +52,6 @@ class TestManager:
         }
 
         self._tests[test_id] = task
-        self._save_test(test_id)  # 持久化
         logger.info(f"测试任务已创建: {test_id} ({test_type})")
         return task
 
@@ -109,6 +107,9 @@ class TestManager:
             else:
                 raise ValueError(f"无法获取串口 {task['serial_port']}")
 
+        # 采集设备信息（SN、主板SN、芯片类型）
+        self._collect_device_info(test_id, context)
+
         # 注册回调
         self.executor.register_callbacks(test_id, {
             "on_step_start": self._on_step_start,
@@ -121,7 +122,8 @@ class TestManager:
         # 异步执行
         self._tests[test_id]["status"] = "running"
         self._tests[test_id]["_context"] = context  # 保存上下文用于清理
-        self._save_test(test_id)  # 持久化状态
+        # 立即持久化到 SQLite，使测试结果页面能看到运行中的测试
+        self.result_service.save_test_result(self._tests[test_id])
         task = asyncio.create_task(self.executor.run(test_id, steps, context))
         self._tasks[test_id] = task
 
@@ -131,6 +133,7 @@ class TestManager:
         syslog 在 SE9 上电后持续运行，不需要等待老化测试开始。
         使用 journalctl 读取系统日志（/var/log/syslog 可能因 journald 配置问题不更新）。
         独立 SSH 连接 + 独立线程，写入本地文件并通过 WebSocket 推送。
+        自动过滤测试框架自身的 sudo/SSH 会话噪音。
         """
         # 防重复启动
         task = self._tests.get(test_id)
@@ -141,9 +144,25 @@ class TestManager:
 
         import threading
         import time
+        import re
         import json as _json
         from ..config import Config
         from ..engine.ssh_client import SSHClient
+
+        # 噪音过滤器：排除测试框架自身的 sudo/SSH 会话日志
+        _SYSLOG_NOISE_RE = re.compile(
+            r'pam_unix\((sudo|sshd):session\): session (opened|closed)'
+            r'|sshd\[\d+\]: Accepted password for '
+            r'|sshd\[\d+\]: pam_unix\(sshd:session\): session (opened|closed)'
+            r'|systemd-logind\[\d+\]: (New|Removed) session \S+ of user'
+            r'|systemd\[\d+\]: (Started|Removed) [Ss]ession \S+ of [Uu]ser'
+            r'|sudo\[\d+\]:\s+\S+\s+:\s+PWD=.*;\s*USER=root\s*;\s*COMMAND='
+            r'|sudo\[\d+\]:\s+pam_unix\(sudo:session\):'
+        )
+
+        def _filter_noise(lines):
+            """过滤掉测试框架自身产生的 syslog 噪音"""
+            return [l for l in lines if not _SYSLOG_NOISE_RE.search(l)]
 
         # 在主线程中创建独立的 SSH 连接（避免线程中 connect 挂起）
         monitor_ssh = SSHClient()
@@ -176,10 +195,6 @@ class TestManager:
                             timeout=30, sudo=True, sudo_password="linaro"
                         )
                         if stdout.strip():
-                            with open(local_path, "w") as f:
-                                f.write(stdout)
-                                if not stdout.endswith("\n"):
-                                    f.write("\n")
                             # 获取最后一条的时间戳（微秒精度）
                             json_out, _, _ = monitor_ssh.exec_cmd(
                                 "journalctl -n 1 -o json --no-pager 2>/dev/null || echo ''",
@@ -190,9 +205,13 @@ class TestManager:
                                 last_ts = int(entry.get("__REALTIME_TIMESTAMP", 0)) / 1_000_000.0
                             except Exception:
                                 last_ts = time.time()
-                            # 保存最后一行用于去重
+                            # 过滤噪音并写入文件
                             lines = [l.strip() for l in stdout.split("\n") if l.strip()]
+                            lines = _filter_noise(lines)
                             last_line = lines[-1] if lines else ""
+                            with open(local_path, "w") as f:
+                                for line in lines:
+                                    f.write(line + "\n")
                             initialized = True
                             logger.info(f"[{test_id}] syslog 初始加载完成: {len(lines)} 条, ts={last_ts}")
                             # 推送初始日志
@@ -221,6 +240,9 @@ class TestManager:
                                     continue
                                 filtered.append(line)
 
+                            if filtered:
+                                # 过滤框架自身噪音
+                                filtered = _filter_noise(filtered)
                             if filtered:
                                 with open(local_path, "a") as f:
                                     for line in filtered:
@@ -251,11 +273,111 @@ class TestManager:
         if test_id in self._tests:
             self._tests[test_id].setdefault("_monitor_threads", []).append(thread)
 
+    def _collect_device_info(self, test_id: str, context: dict):
+        """采集设备信息（SN、主板SN、芯片类型），写入 task 字典"""
+        task = self._tests.get(test_id)
+        if not task:
+            return
+
+        serial_client = context.get("serial_client")
+        ssh_client = context.get("ssh_client")
+
+        # 通过 SSH 运行 show_ddr 检测芯片型号，用于老化测试 --chip_type 参数
+        if ssh_client:
+            try:
+                stdout, _, _ = ssh_client.exec_cmd(
+                    "show_ddr 2>/dev/null", timeout=10, sudo=True, sudo_password="linaro"
+                )
+                out_lower = stdout.strip().lower()
+                detected_chip = ""
+                if "cv186ah" in out_lower:
+                    detected_chip = "cv186ah"
+                elif "bm1688" in out_lower:
+                    detected_chip = "bm1688"
+                elif "cv84x6" in out_lower:
+                    detected_chip = "cv84x6"
+                if detected_chip:
+                    context.setdefault("params", {})["chip_model"] = detected_chip
+                    task.setdefault("extra_info", {})["chip_model"] = detected_chip
+                    logger.info(f"[{test_id}] 检测到芯片型号: {detected_chip}")
+            except Exception as e:
+                logger.warning(f"[{test_id}] 芯片型号检测失败: {e}")
+
+        if serial_client:
+            try:
+                from ..engine.device_ops import DeviceOps
+                ops = DeviceOps(serial_client)
+                sn = ops.get_device_sn()
+                board_sn = ops.get_board_sn()
+                chip_type = ops.get_chip_type()
+                if sn:
+                    task["serial_number"] = sn
+                    logger.info(f"[{test_id}] 设备 SN: {sn}")
+                if board_sn:
+                    task["board_sn"] = board_sn
+                    logger.info(f"[{test_id}] 主板 SN: {board_sn}")
+                task.setdefault("extra_info", {})["chip_type"] = chip_type
+            except Exception as e:
+                logger.warning(f"[{test_id}] 串口采集设备信息失败: {e}")
+
+        if ssh_client and not task.get("serial_number"):
+            try:
+                # 方法1: fw_printenv
+                stdout, stderr, code = ssh_client.exec_cmd(
+                    "fw_printenv serial_number 2>/dev/null", timeout=10,
+                    sudo=True, sudo_password="linaro"
+                )
+                logger.info(f"[{test_id}] fw_printenv serial_number: stdout={stdout.strip()!r}, stderr={stderr.strip()!r}")
+                import re
+                match = re.search(r"serial_number[= ](\S+)", stdout)
+                if match:
+                    task["serial_number"] = match.group(1).strip()
+                    logger.info(f"[{test_id}] 设备 SN (fw_printenv): {task['serial_number']}")
+
+                # 方法2: 如果 fw_printenv 没拿到，尝试从 OEMconfig.ini 读取
+                if not task.get("serial_number"):
+                    stdout2, _, _ = ssh_client.exec_cmd(
+                        "cat /factory/OEMconfig.ini 2>/dev/null | grep -i 'serial_number\\|SN' || echo ''",
+                        timeout=10, sudo=True, sudo_password="linaro"
+                    )
+                    logger.info(f"[{test_id}] OEMconfig SN: {stdout2.strip()!r}")
+                    match_sn = re.search(r'(?:serial_number|SN)\s*[=:]\s*(\S+)', stdout2, re.IGNORECASE)
+                    if match_sn:
+                        task["serial_number"] = match_sn.group(1).strip()
+                        logger.info(f"[{test_id}] 设备 SN (OEMconfig): {task['serial_number']}")
+
+                # 主板 SN
+                stdout3, _, _ = ssh_client.exec_cmd(
+                    "fw_printenv board_sn 2>/dev/null", timeout=10,
+                    sudo=True, sudo_password="linaro"
+                )
+                match2 = re.search(r"board_sn[= ](\S+)", stdout3)
+                if match2:
+                    task["board_sn"] = match2.group(1).strip()
+                    logger.info(f"[{test_id}] 主板 SN: {task['board_sn']}")
+
+                if not task.get("serial_number"):
+                    logger.warning(f"[{test_id}] 未能获取设备 SN，fw_printenv 和 OEMconfig 均未找到")
+            except Exception as e:
+                logger.warning(f"[{test_id}] SSH 采集设备信息失败: {e}")
+            except Exception as e:
+                logger.warning(f"[{test_id}] SSH 采集设备信息失败: {e}")
+
     async def stop_test(self, test_id: str):
         """停止测试"""
         self.executor.stop(test_id)
         if test_id in self._tests:
             self._tests[test_id]["status"] = "stopped"
+
+    def mark_test_failed(self, test_id: str, error_message: str):
+        """标记测试为失败（用于启动失败等无法进入执行器流程的场景）"""
+        if test_id in self._tests:
+            self._tests[test_id]["status"] = "failed"
+            self._tests[test_id]["error_message"] = error_message
+            self._tests[test_id]["finished_at"] = datetime.now()
+            # 持久化到 SQLite，使测试结果页面可以看到
+            self.result_service.save_test_result(self._tests[test_id])
+            logger.info(f"测试标记为失败: {test_id}, 原因: {error_message}")
 
     async def pause_test(self, test_id: str):
         """暂停测试"""
@@ -272,57 +394,45 @@ class TestManager:
         self.executor.resolve_interaction(test_id, response)
 
     def get_test(self, test_id: str) -> Optional[dict]:
-        """获取测试详情"""
+        """获取测试详情（返回副本，避免调用方意外修改内存状态）"""
         task = self._tests.get(test_id)
         if not task:
             return None
-        status = self.executor.get_status(test_id)
-        if status:
-            task["current_step"] = status["current_step"]
-            task["status"] = status["status"]
-            task["steps"] = status.get("results", [])
-        return task
+        # 浅拷贝，附加 executor 最新状态
+        result = dict(task)
+        exec_status = self.executor.get_status(test_id)
+        if exec_status:
+            result["current_step"] = exec_status["current_step"]
+            result["status"] = exec_status["status"]
+            result["steps"] = exec_status.get("results", [])
+        return result
+
+    def _clean_task(self, task: dict) -> dict:
+        """过滤 task 中的内部字段，返回可序列化的副本"""
+        return {k: v for k, v in task.items() if not k.startswith("_")}
+
+    def sync_running_to_db(self):
+        """将所有运行中的测试同步到 SQLite 数据库。
+
+        用于确保在部署修复后，已存在的运行中测试也能出现在测试结果页面。
+        仅在测试状态为 running 时调用 save_test_result（upsert 操作，安全幂等）。
+        """
+        count = 0
+        for test_id, task in self._tests.items():
+            if task.get("status") == "running":
+                try:
+                    self.result_service.save_test_result(task)
+                    count += 1
+                except Exception as e:
+                    logger.warning(f"同步测试 {test_id} 到数据库失败: {e}")
+        if count > 0:
+            logger.info(f"已将 {count} 个运行中的测试同步到数据库")
 
     def get_all_tests(self) -> list:
         """获取所有测试"""
         return [
-            self.get_test(tid) for tid in self._tests
+            self._clean_task(self.get_test(tid)) for tid in self._tests
         ]
-
-    def _save_test(self, test_id: str):
-        """持久化测试状态到文件"""
-        task = self._tests.get(test_id)
-        if not task:
-            return
-        import json
-        from ..config import Config
-        tests_dir = Config.DATA_DIR / "tests"
-        tests_dir.mkdir(parents=True, exist_ok=True)
-        path = tests_dir / f"{test_id}.json"
-        try:
-            # 不序列化不可序列化的对象（ssh_client 等）
-            save_data = {k: v for k, v in task.items()
-                         if k not in ("_context",)}
-            with open(path, "w") as f:
-                json.dump(save_data, f, ensure_ascii=False, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"保存测试状态失败: {e}")
-
-    def _load_existing_tests(self):
-        """从磁盘加载已有的测试状态"""
-        import json
-        from ..config import Config
-        tests_dir = Config.DATA_DIR / "tests"
-        if not tests_dir.exists():
-            return
-        for f in tests_dir.glob("*.json"):
-            try:
-                with open(f) as fp:
-                    task = json.load(fp)
-                self._tests[task["test_id"]] = task
-                logger.info(f"加载已有测试: {task['test_id']} ({task.get('status', 'unknown')})")
-            except Exception as e:
-                logger.error(f"加载测试文件失败 {f}: {e}")
 
     # === 回调处理 ===
     async def _on_step_start(self, test_id, step_index, step_name):
@@ -333,12 +443,18 @@ class TestManager:
             "result": "running",
             "duration_ms": 0,
         })
-        # 也更新 current_step
+        # 更新 current_step 和当前步骤名
         if test_id in self._tests:
             self._tests[test_id]["current_step"] = step_index + 1
+            self._tests[test_id]["_current_step_name"] = step_name
 
     async def _on_step_complete(self, test_id, step_index, result, message, duration):
-        self.result_service.save_step_result(test_id, step_index, result, message, duration)
+        # 获取步骤名
+        task = self._tests.get(test_id, {})
+        step_name = task.get("_current_step_name", "")
+        self.result_service.save_step_result(
+            test_id, step_index, step_name, result, message, duration
+        )
         from ..api.ws import broadcast_to_test
         await broadcast_to_test(test_id, "step_update", {
             "step_index": step_index,
@@ -363,12 +479,24 @@ class TestManager:
             "old": old_status,
             "new": new_status,
         })
+        # 保存到 SQLite（running 状态也需要持久化，以便测试结果页面显示运行中的测试）
+        task = self._tests.get(test_id, {})
+        if task:
+            self.result_service.save_test_result(task)
         if new_status in ("completed", "failed", "stopped"):
-            task = self._tests.get(test_id, {})
             if task:
                 task["finished_at"] = datetime.now()
+                # 统计 passed/failed/skipped
+                status = self.executor.get_status(test_id)
+                if status:
+                    results = status.get("results", [])
+                    task["passed"] = sum(1 for r in results if r["result"] == "pass")
+                    task["failed"] = sum(1 for r in results if r["result"] == "fail")
+                    task["skipped"] = sum(1 for r in results if r["result"] == "skip")
+                # 记录 log 文件路径
+                task.setdefault("extra_info", {})["aging_log"] = f"log/aging_{test_id}.log"
+                task.setdefault("extra_info", {})["syslog_log"] = f"log/syslog_{test_id}.log"
             self.result_service.save_test_result(task)
-            self._save_test(test_id)  # 持久化最终状态
             # 清理 SSH/串口连接
             task = self._tests.get(test_id, {})
             context = task.get("_context", {})

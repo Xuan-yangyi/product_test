@@ -16,22 +16,26 @@ const props = withDefaults(defineProps<{
 
 const tagType = computed(() => {
   switch (props.result) {
-    case 'pass': return 'success'
-    case 'fail': return 'danger'
+    case 'pass': case 'completed': return 'success'
+    case 'fail': case 'failed': return 'danger'
     case 'running': return 'warning'
     case 'pending': return 'info'
     case 'skip': return 'info'
+    case 'stopped': return 'info'
+    case 'interrupted': return 'warning'
     default: return 'info'
   }
 })
 
 const label = computed(() => {
   switch (props.result) {
-    case 'pass': return 'PASS'
-    case 'fail': return 'FAIL'
+    case 'pass': case 'completed': return 'PASS'
+    case 'fail': case 'failed': return 'FAIL'
     case 'running': return 'RUN'
     case 'pending': return 'WAIT'
     case 'skip': return 'SKIP'
+    case 'stopped': return 'STOP'
+    case 'interrupted': return '中断'
     default: return props.result.toUpperCase()
   }
 })
