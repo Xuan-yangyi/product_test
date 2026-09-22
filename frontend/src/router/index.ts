@@ -26,6 +26,18 @@ const router = createRouter({
       meta: { title: '测试结果' },
     },
     {
+      path: '/sn-captures',
+      name: 'sn-captures',
+      component: () => import('@/views/SnCaptureView.vue'),
+      meta: { title: 'SN 抓拍' },
+    },
+    {
+      path: '/camera-preview',
+      name: 'camera-preview',
+      component: () => import('@/views/CameraPreviewView.vue'),
+      meta: { title: '调机预览' },
+    },
+    {
       path: '/devices',
       name: 'devices',
       component: () => import('@/views/DeviceManageView.vue'),

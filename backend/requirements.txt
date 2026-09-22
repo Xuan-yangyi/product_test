@@ -1,6 +1,6 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.2
+pydantic>=2.10.0
 sqlalchemy==2.0.23
 pyserial==3.5
 paramiko==3.3.1

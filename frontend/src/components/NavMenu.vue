@@ -21,6 +21,14 @@
       <el-icon><Document /></el-icon>
       <span>测试结果</span>
     </el-menu-item>
+    <el-menu-item index="/sn-captures">
+      <el-icon><Picture /></el-icon>
+      <span>SN 抓拍</span>
+    </el-menu-item>
+    <el-menu-item index="/camera-preview">
+      <el-icon><VideoCamera /></el-icon>
+      <span>调机预览</span>
+    </el-menu-item>
     <el-menu-item index="/config">
       <el-icon><Setting /></el-icon>
       <span>配置管理</span>
@@ -31,7 +39,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Document, Setting, Connection, Cpu } from '@element-plus/icons-vue'
+import { Document, Setting, Connection, Cpu, Picture, VideoCamera } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const activeRoute = computed(() => {

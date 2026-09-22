@@ -37,4 +37,7 @@ frontend/dist/
 
 # Environment
 .env
-.env.local
+.env.local*.bak
+*.bak_*
+*.log
+*.pre_*
