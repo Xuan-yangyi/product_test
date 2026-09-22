@@ -1,8 +1,13 @@
 """测试类型 API"""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from ..services.config_service import ConfigService
 
 router = APIRouter(prefix="/api/v1", tags=["test-types"])
+
+
+class UpdateCaseRequest(BaseModel):
+    enabled: bool
 
 
 def get_config_service() -> ConfigService:
@@ -33,3 +38,20 @@ async def get_show_config(test_type: str, cs: ConfigService = Depends(get_config
     """获取 UI 控件显示配置"""
     config = cs.get_show_config()
     return {"config": config.get(test_type, {})}
+
+
+@router.put("/test-types/{test_type}/cases/{case_name}")
+async def update_test_case(
+    test_type: str,
+    case_name: str,
+    req: UpdateCaseRequest,
+    cs: ConfigService = Depends(get_config_service),
+):
+    """更新测试用例的启用/禁用状态"""
+    try:
+        result = cs.update_test_case_enabled(test_type, case_name, req.enabled)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

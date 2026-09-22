@@ -2,7 +2,6 @@
 
 管理测试结果的 SQLite 数据库读写，支持历史数据查询和统计。
 """
-import json
 import logging
 from datetime import datetime
 from typing import List, Optional
@@ -23,71 +22,8 @@ class ResultService:
         try:
             self._session_factory = create_session_factory()
             logger.info("SQLite 数据库连接成功")
-            # 自动迁移历史 JSON 数据
-            self._migrate_json_to_db()
         except Exception as e:
             logger.warning(f"SQLite 数据库初始化失败: {e}")
-
-    def _migrate_json_to_db(self):
-        """将 data/tests/*.json 的历史数据导入 SQLite（仅导入一次）"""
-        from ..config import Config
-        tests_dir = Config.DATA_DIR / "tests"
-        if not tests_dir.exists():
-            return
-
-        sessions = self._session_factory
-        if not sessions:
-            return
-
-        session = sessions()
-        try:
-            imported_count = 0
-            for f in tests_dir.glob("*.json"):
-                try:
-                    with open(f, "r", encoding="utf-8") as fp:
-                        task = json.load(fp)
-
-                    test_id = task.get("test_id", "")
-                    if not test_id:
-                        continue
-
-                    # 检查是否已导入
-                    existing = session.query(TestRecord).filter_by(test_id=test_id).first()
-                    if existing:
-                        continue
-
-                    # 解析日期字段（JSON 中存储为字符串）
-                    created_at = _parse_datetime(task.get("created_at"))
-                    finished_at = _parse_datetime(task.get("finished_at"))
-
-                    record = TestRecord(
-                        test_id=test_id,
-                        test_type=task.get("test_type", ""),
-                        product_model=task.get("product_model", ""),
-                        serial_number=task.get("serial_number", task.get("serial_number", "")),
-                        serial_port=task.get("serial_port", ""),
-                        device_ip=task.get("device_ip", ""),
-                        cluster_id=task.get("cluster_id", ""),
-                        status=task.get("status", "completed"),
-                        total_steps=task.get("total_steps", 0),
-                        current_step=task.get("current_step", 0),
-                        params=task.get("params", {}),
-                        created_at=created_at or datetime.now(),
-                        finished_at=finished_at,
-                    )
-                    session.add(record)
-                    imported_count += 1
-                except Exception:
-                    session.rollback()
-
-            if imported_count > 0:
-                session.commit()
-                logger.info(f"已从 JSON 文件迁移 {imported_count} 条历史测试记录到 SQLite")
-        except Exception as e:
-            session.rollback()
-            logger.warning(f"JSON 数据迁移失败: {e}")
-        finally:
-            session.close()
 
     def save_test_result(self, task: dict):
         """保存/更新测试结果到 SQLite"""
@@ -116,10 +52,17 @@ class ResultService:
             record.status = task.get("status", record.status)
             record.total_steps = task.get("total_steps", record.total_steps)
             record.current_step = task.get("current_step", record.current_step)
+            record.serial_number = task.get("serial_number") or record.serial_number
+            record.board_sn = task.get("board_sn") or record.board_sn
             record.device_ip = task.get("device_ip") or record.device_ip
             record.cluster_id = task.get("cluster_id") or record.cluster_id
+            record.passed = task.get("passed", record.passed or 0)
+            record.failed = task.get("failed", record.failed or 0)
+            record.skipped = task.get("skipped", record.skipped or 0)
             if task.get("params"):
                 record.params = task.get("params")
+            if task.get("extra_info"):
+                record.extra_info = task.get("extra_info")
 
             if task.get("status") in ("completed", "failed", "stopped"):
                 record.finished_at = task.get("finished_at", datetime.now())
@@ -136,8 +79,8 @@ class ResultService:
         finally:
             session.close()
 
-    def save_step_result(self, test_id: str, step_index: int, result: str,
-                         message: str, duration_ms: int):
+    def save_step_result(self, test_id: str, step_index: int, step_name: str,
+                         result: str, message: str, duration_ms: int):
         """保存步骤结果到 SQLite"""
         if not self._session_factory:
             return
@@ -147,7 +90,7 @@ class ResultService:
             step = StepResult(
                 test_id=test_id,
                 step_index=step_index,
-                step_name="",
+                step_name=step_name,
                 step_label=message,
                 result=result,
                 duration_ms=duration_ms,
@@ -222,6 +165,7 @@ class ResultService:
             result["steps"] = [
                 {
                     "step_index": s.step_index,
+                    "step_name": s.step_name or "",
                     "step_label": s.step_label,
                     "result": s.result,
                     "duration_ms": s.duration_ms,
@@ -264,6 +208,94 @@ class ResultService:
         finally:
             session.close()
 
+    def export_csv(self, filters: dict = None) -> str:
+        """导出测试结果为 CSV 字符串
+
+        Args:
+            filters: 同 query_results 的筛选条件
+
+        Returns:
+            CSV 格式字符串（含表头）
+        """
+        import csv
+        import io
+
+        # 获取全部数据（不分页）
+        all_filters = dict(filters or {})
+        all_filters["page"] = 1
+        all_filters["page_size"] = 100000  # 大量数据
+        result = self.query_results(all_filters)
+        items = result.get("items", [])
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # 表头
+        writer.writerow([
+            "test_id", "test_type", "product_model", "serial_number",
+            "board_sn", "device_ip", "status", "passed", "failed",
+            "skipped", "total_steps", "duration_seconds",
+            "created_at", "finished_at",
+        ])
+
+        for item in items:
+            writer.writerow([
+                item.get("test_id", ""),
+                item.get("test_type", ""),
+                item.get("product_model", ""),
+                item.get("serial_number", ""),
+                item.get("board_sn", ""),
+                item.get("device_ip", ""),
+                item.get("status", ""),
+                item.get("passed", 0),
+                item.get("failed", 0),
+                item.get("skipped", 0),
+                item.get("total_steps", 0),
+                item.get("duration_seconds", 0),
+                item.get("created_at", ""),
+                item.get("finished_at", ""),
+            ])
+
+        return output.getvalue()
+
+    def clean_stale_running_records(self, active_test_ids: set) -> int:
+        """清理残留的 running 记录。
+
+        后端重启后，SQLite 中可能有残留的 "running" 记录（测试已不存在于内存中）。
+        将这些记录标记为 "interrupted"。
+        Args:
+            active_test_ids: 当前内存中存在的 test_id 集合
+        Returns:
+            清理的记录数
+        """
+        if not self._session_factory:
+            return 0
+
+        session = self._session_factory()
+        try:
+            from datetime import datetime
+            stale = session.query(TestRecord).filter(
+                TestRecord.status == "running"
+            ).all()
+
+            count = 0
+            for record in stale:
+                if record.test_id not in active_test_ids:
+                    record.status = "interrupted"
+                    record.finished_at = datetime.now()
+                    count += 1
+
+            if count > 0:
+                session.commit()
+                logger.info(f"清理残留记录: {count} 条 running -> interrupted")
+            return count
+        except Exception as e:
+            session.rollback()
+            logger.error(f"清理残留记录失败: {e}")
+            return 0
+        finally:
+            session.close()
+
 
 def _parse_datetime(value) -> Optional[datetime]:
     """解析日期字符串为 datetime 对象"""
@@ -296,9 +328,13 @@ def _record_to_dict(r: TestRecord) -> dict:
         "device_ip": r.device_ip or "",
         "cluster_id": r.cluster_id or "",
         "params": r.params or {},
+        "extra_info": r.extra_info or {},
         "status": r.status,
         "total_steps": r.total_steps or 0,
         "current_step": r.current_step or 0,
+        "passed": r.passed or 0,
+        "failed": r.failed or 0,
+        "skipped": r.skipped or 0,
         "duration_seconds": r.duration_seconds or 0.0,
         "created_at": r.created_at.isoformat() if r.created_at else "",
         "finished_at": r.finished_at.isoformat() if r.finished_at else "",

@@ -1,7 +1,8 @@
 """配置管理 API"""
 import os
 import shutil
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException
+from pydantic import BaseModel
 from ..services.config_service import ConfigService
 from ..models.schemas import CreateProductModelRequest
 from ..config import Config
@@ -103,3 +104,88 @@ async def get_fw_version_config(cs: ConfigService = Depends(get_config_service))
 async def get_show_config(cs: ConfigService = Depends(get_config_service)):
     """获取 UI 显示配置"""
     return {"config": cs.get_show_config()}
+
+
+# ============================================================
+#  Profile 管理
+# ============================================================
+
+@router.get("/config/profiles")
+async def list_profiles(cs: ConfigService = Depends(get_config_service)):
+    """列出所有配置 profile"""
+    return {"profiles": cs.list_profiles()}
+
+
+@router.post("/config/profiles")
+async def create_profile(
+    name: str = Form(...),
+    oem_file: UploadFile = File(...),
+    cs: ConfigService = Depends(get_config_service),
+):
+    """创建新的配置 profile（名称 + OEMconfig.ini 文件）"""
+    try:
+        content = (await oem_file.read()).decode("utf-8")
+        result = cs.create_profile(name, content)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="OEM 文件编码错误，仅支持 UTF-8")
+
+
+@router.get("/config/profiles/{name}")
+async def get_profile(
+    name: str,
+    cs: ConfigService = Depends(get_config_service),
+):
+    """获取 profile 详情（含 OEM 文件内容）"""
+    try:
+        return cs.get_profile(name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put("/config/profiles/{name}/oem")
+async def update_profile_oem(
+    name: str,
+    oem_file: UploadFile = File(...),
+    cs: ConfigService = Depends(get_config_service),
+):
+    """更新 profile 的 OEM 配置文件"""
+    try:
+        content = (await oem_file.read()).decode("utf-8")
+        return cs.update_profile_oem(name, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="OEM 文件编码错误，仅支持 UTF-8")
+
+
+@router.delete("/config/profiles/{name}")
+async def delete_profile(
+    name: str,
+    cs: ConfigService = Depends(get_config_service),
+):
+    """删除 profile"""
+    try:
+        cs.delete_profile(name)
+        return {"status": "deleted", "name": name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class UpdateTestOptionsRequest(BaseModel):
+    test_options: dict
+
+
+@router.put("/config/profiles/{name}/test-options")
+async def update_profile_test_options(
+    name: str,
+    req: UpdateTestOptionsRequest,
+    cs: ConfigService = Depends(get_config_service),
+):
+    """更新 profile 的测试选项"""
+    try:
+        return cs.update_profile_test_options(name, req.test_options)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

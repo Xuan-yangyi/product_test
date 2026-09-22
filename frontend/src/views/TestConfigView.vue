@@ -29,7 +29,7 @@
           <el-input v-model="form.device_ip" placeholder="输入设备 IP 地址" />
         </el-form-item>
 
-        <el-form-item label="设备数量" v-if="needsNetwork">
+        <el-form-item label="设备数量" v-if="isAgingTest">
           <el-input-number v-model="form.device_count" :min="1" :max="100" />
         </el-form-item>
 
@@ -67,9 +67,11 @@
         <el-table-column prop="label" label="描述" />
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
-              {{ row.enabled ? '启用' : '禁用' }}
-            </el-tag>
+            <el-switch
+              :model-value="row.enabled"
+              @change="(val: boolean) => toggleCase(row.name, val)"
+              size="small"
+            />
           </template>
         </el-table-column>
       </el-table>
@@ -132,6 +134,19 @@ onMounted(async () => {
 
 async function refreshSerials() {
   await deviceStore.scanSerials()
+}
+
+async function toggleCase(caseName: string, enabled: boolean) {
+  try {
+    await testApi.updateCase(testType.value, caseName, enabled)
+    const idx = testCases.value.findIndex((c: any) => c.name === caseName)
+    if (idx >= 0) {
+      testCases.value[idx].enabled = enabled
+    }
+    ElMessage.success(`${caseName} 已${enabled ? '启用' : '禁用'}`)
+  } catch (e: any) {
+    ElMessage.error(e?.detail || '更新失败')
+  }
 }
 
 async function startTest() {

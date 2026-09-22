@@ -19,11 +19,103 @@ class DeviceManager:
         """扫描所有串口设备"""
         return SerialClient.scan_ports()
 
+    def _detect_device_info(self, ip: str) -> dict:
+        """通过 SSH 检测设备信息
+
+        执行 show_ddr 命令，解析芯片型号和 DDR 容量。
+        同时读取 /factory/OEMconfig.ini 获取 MODULE_TYPE。
+        执行 bm_version 获取 SDK 版本。
+        Returns: {"device_type": str, "chip_model": str, "ddr_capacity": str, "module_type": str, "sdk_version": str}
+        """
+        import re
+        info = {"device_type": "", "chip_model": "", "ddr_capacity": "", "module_type": "", "sdk_version": ""}
+        try:
+            ssh = SSHClient()
+            if not ssh.connect(ip, user="linaro", password="linaro", timeout=5):
+                return info
+
+            # 1. show_ddr — 芯片型号 & DDR 容量
+            stdout, _, _ = ssh.exec_cmd("show_ddr 2>/dev/null", timeout=10, sudo=True, sudo_password="linaro")
+            out = stdout.strip()
+            out_lower = out.lower()
+            if "bm1688" in out_lower:
+                info["chip_model"] = "bm1688"
+                info["device_type"] = "SE9"
+            elif "cv186ah" in out_lower:
+                info["chip_model"] = "cv186ah"
+                info["device_type"] = "SE9"
+            elif "cv84x6" in out_lower:
+                info["chip_model"] = "cv84x6"
+                info["device_type"] = "SE12"
+            elif out:
+                m = re.search(r'(bm\d+|cv\w+)', out_lower)
+                if m:
+                    info["chip_model"] = m.group(1)
+                    info["device_type"] = "其他"
+
+            m = re.search(r'SIZE\s*:\s*(\d+)\s*(MB|GB)', out, re.IGNORECASE)
+            if m:
+                val = int(m.group(1))
+                unit = m.group(2).upper()
+                if unit == 'MB':
+                    val = val // 1024
+                if val > 0:
+                    info["ddr_capacity"] = f"{val}GB"
+
+            # 2. OEMconfig.ini — MODULE_TYPE
+            stdout2, _, _ = ssh.exec_cmd(
+                "cat /factory/OEMconfig.ini 2>/dev/null", timeout=10,
+                sudo=True, sudo_password="linaro"
+            )
+            oem_out = stdout2.strip()
+            if oem_out:
+                # 正则提取（跳过 flag 值如 INTERFACE_FLAG、0x01 等）
+                m = re.search(r'MODULE_TYPE\s*=\s*(\S+)', oem_out)
+                if m:
+                    val = m.group(1)
+                    # 过滤掉明显不是型号值的 flag 类字符串
+                    if val not in ("INTERFACE_FLAG",) and not re.match(r'^0x[0-9a-fA-F]+$', val):
+                        info["module_type"] = val
+
+            # 3. bm_version — SDK 版本，提取版本号如 "2.2"
+            stdout3, _, _ = ssh.exec_cmd("bm_version 2>/dev/null", timeout=10,
+                                         sudo=True, sudo_password="linaro")
+            ssh.close()
+            sdk_out = stdout3.strip()
+            if sdk_out:
+                # 从 "SophonSDK(BM1688) 2.2" 中提取版本号
+                m = re.search(r'(\d+\.\d+(?:\.\d+)?)', sdk_out)
+                if m:
+                    info["sdk_version"] = f"SDK {m.group(1)}"
+                else:
+                    info["sdk_version"] = sdk_out
+
+        except Exception:
+            pass
+        return info
+
+    def _fill_device_types(self, devices: List[Dict]):
+        """并行检测在线设备的类型、芯片和 DDR 容量"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def detect(dev: dict):
+            info = self._detect_device_info(dev["ip"])
+            dev["device_type"] = info["device_type"]
+            dev["chip_model"] = info["chip_model"]
+            dev["ddr_capacity"] = info["ddr_capacity"]
+            dev["module_type"] = info["module_type"]
+            dev["sdk_version"] = info["sdk_version"]
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(detect, d) for d in devices]
+            for future in as_completed(futures):
+                future.result()
+
     def scan_network_devices(self) -> List[Dict]:
         """扫描网络中的设备
 
         读取 network_config.yaml 中的网段配置，
-        扫描在线设备。
+        扫描在线设备并检测设备类型。
         """
         config = self._load_network_config()
         network_segment = config.get("network_segment", "")
@@ -44,15 +136,19 @@ class DeviceManager:
                     "device_type": "",
                 })
 
+        # 并行检测设备类型
+        if devices:
+            self._fill_device_types(devices)
+
         return devices
 
     def batch_scan_ips(self, ips: List[str], timeout: int = 2) -> List[Dict]:
-        """批量扫描 IP 地址，返回在线设备列表"""
+        """批量扫描 IP 地址，返回在线设备列表并检测设备类型"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def check_ip(ip: str) -> dict | None:
             if SSHClient.is_ip_alive(ip, timeout=timeout):
-                return {"ip": ip, "hostname": "", "status": "online"}
+                return {"ip": ip, "hostname": "", "status": "online", "device_type": ""}
             return None
 
         devices = []
@@ -62,8 +158,12 @@ class DeviceManager:
                 result = future.result()
                 if result:
                     devices.append(result)
-        return devices
 
+        # 并行检测设备类型
+        if devices:
+            self._fill_device_types(devices)
+
+        return devices
 
     def get_device_info_via_ssh(self, ip: str, user: str = "root", password: str = "") -> dict:
         """通过 SSH 获取设备信息"""

@@ -1,7 +1,9 @@
 """测试结果 API"""
 import os
 from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import Optional
+import io
 from ..services.result_service import ResultService
 from ..config import Config
 
@@ -68,9 +70,21 @@ async def get_test_logs(test_id: str):
 
 @router.get("/results/{test_id}/syslog")
 async def get_test_syslog(test_id: str):
-    """获取测试系统日志（syslog）"""
+    """获取测试系统日志（syslog），自动过滤测试框架噪音"""
+    import re
     log_dir = Config.LOG_DIR
     syslog_file = log_dir / f"syslog_{test_id}.log"
+
+    # 噪音过滤器：排除测试框架自身的 sudo/SSH 会话日志
+    _NOISE_RE = re.compile(
+        r'pam_unix\((sudo|sshd):session\): session (opened|closed)'
+        r'|sshd\[\d+\]: Accepted password for '
+        r'|sshd\[\d+\]: pam_unix\(sshd:session\): session (opened|closed)'
+        r'|systemd-logind\[\d+\]: (New|Removed) session \S+ of user'
+        r'|systemd\[\d+\]: (Started|Removed) [Ss]ession \S+ of [Uu]ser'
+        r'|sudo\[\d+\]:\s+\S+\s+:\s+PWD=.*;\s*USER=root\s*;\s*COMMAND='
+        r'|sudo\[\d+\]:\s+pam_unix\(sudo:session\):'
+    )
 
     if not syslog_file.exists():
         return {"test_id": test_id, "log_file": None, "lines": [], "total_lines": 0,
@@ -79,11 +93,12 @@ async def get_test_syslog(test_id: str):
     try:
         with open(syslog_file, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
+        filtered = [line.rstrip() for line in lines if not _NOISE_RE.search(line)]
         return {
             "test_id": test_id,
             "log_file": str(syslog_file),
-            "lines": [line.rstrip() for line in lines[-500:]],
-            "total_lines": len(lines),
+            "lines": filtered[-500:],
+            "total_lines": len(filtered),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -106,8 +121,31 @@ async def get_statistics(
 
 @router.get("/results/{test_id}")
 async def get_test_result(test_id: str, rs: ResultService = Depends(get_result_service)):
-    """获取单个测试结果详情"""
-    results = rs.query_results({"test_id": test_id})
-    if not results.get("items"):
+    """获取单个测试结果详情（含步骤）"""
+    detail = rs.get_test_detail(test_id)
+    if not detail:
         raise HTTPException(status_code=404, detail="测试结果不存在")
-    return results["items"][0]
+    return detail
+
+
+@router.get("/results/export/csv")
+async def export_results_csv(
+    test_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    rs: ResultService = Depends(get_result_service),
+):
+    """导出测试结果为 CSV 文件"""
+    filters = {
+        "test_type": test_type,
+        "status": status,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    csv_content = rs.export_csv(filters)
+    return StreamingResponse(
+        io.BytesIO(csv_content.encode("utf-8-sig")),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=test_results.csv"},
+    )

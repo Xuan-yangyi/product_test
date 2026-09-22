@@ -1,6 +1,6 @@
 <template>
   <div class="cluster-view">
-    <h2 class="page-title">集群老化测试</h2>
+    <h2 class="page-title">老化测试</h2>
 
     <!-- IP 段扫描 -->
     <el-card shadow="never" class="section-card">
@@ -18,7 +18,7 @@
           </el-button>
         </el-form-item>
       </el-form>
-      <div class="scan-hint">扫描局域网内的 SE9 设备（通过 ping 检测在线状态）</div>
+      <div class="scan-hint">扫描局域网内的设备（通过 ping 检测在线状态）</div>
     </el-card>
 
     <!-- 发现的设备 -->
@@ -35,7 +35,23 @@
       >
         <el-table-column type="selection" width="50" />
         <el-table-column prop="ip" label="IP 地址" width="150" />
-        <el-table-column prop="hostname" label="主机名" min-width="120" />
+        <el-table-column label="设备类型" min-width="200">
+          <template #default="{ row }">
+            <template v-if="row.chip_model">
+              <el-tag type="warning" size="small">{{ row.device_type || '其他' }}</el-tag>
+              <span class="chip-info">{{ row.chip_model }}</span>
+              <span v-if="row.module_type" class="module-info">{{ row.module_type }}</span>
+              <span v-if="row.ddr_capacity" class="ddr-info">{{ row.ddr_capacity }}</span>
+            </template>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="SDK 版本" width="100">
+          <template #default="{ row }">
+            <span v-if="row.sdk_version" class="sdk-info">{{ row.sdk_version }}</span>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag type="success" size="small">在线</el-tag>
@@ -59,31 +75,56 @@
         </el-form-item>
         <el-form-item>
           <el-button type="primary" size="large" @click="startCluster" :loading="starting">
-            开始集群老化
-          </el-button>
-          <el-button size="large" @click="stopCluster" v-if="clusterStatus === 'running'" type="danger">
-            停止集群
+            开始老化测试
           </el-button>
         </el-form-item>
       </el-form>
     </el-card>
 
     <!-- 集群运行状态 -->
-    <el-card shadow="never" class="section-card" v-if="clusterNodes.length">
+    <el-card
+      shadow="never"
+      class="section-card"
+      v-for="cluster in activeClusters"
+      :key="cluster.clusterId"
+    >
       <template #header>
-        <span>集群状态</span>
-        <el-tag :type="statusTagType" style="margin-left: 12px">{{ clusterStatus }}</el-tag>
-        <span class="summary-text">
-          {{ summary.completed }}/{{ summary.total }} 完成
-          <span v-if="summary.failed">, {{ summary.failed }} 失败</span>
-        </span>
-        <el-button size="small" @click="refreshCluster" :loading="refreshing" style="float: right">
-          <el-icon><Refresh /></el-icon> 刷新
-        </el-button>
+        <div class="cluster-card-header">
+          <span class="cluster-card-title">测试状态</span>
+          <el-tag size="small" type="info" style="margin-left: 8px">{{ cluster.clusterId }}</el-tag>
+          <el-tag :type="statusTagType(cluster.status)" style="margin-left: 8px">{{ statusText(cluster.status) }}</el-tag>
+          <span class="summary-text">
+            {{ cluster.summary.completed }}/{{ cluster.summary.total }} 完成
+            <span v-if="cluster.summary.failed">, {{ cluster.summary.failed }} 失败</span>
+          </span>
+          <el-button
+            v-if="cluster.status === 'interrupted'"
+            size="small"
+            type="success"
+            @click="resumeCluster(cluster.clusterId)"
+            :loading="cluster._resuming"
+            style="float: right; margin-right: 8px"
+          >
+            <el-icon><Refresh /></el-icon> 恢复监控
+          </el-button>
+          <el-button
+            v-if="cluster.status === 'completed' || cluster.status === 'failed'"
+            size="small"
+            type="danger"
+            plain
+            @click="dismissCluster(cluster.clusterId)"
+            style="float: right; margin-right: 8px"
+          >
+            <el-icon><Delete /></el-icon> 清除
+          </el-button>
+          <el-button size="small" @click="refreshSingleCluster(cluster)" style="float: right">
+            <el-icon><Refresh /></el-icon> 刷新
+          </el-button>
+        </div>
       </template>
       <div class="cluster-grid">
         <el-card
-          v-for="node in clusterNodes"
+          v-for="node in cluster.nodes"
           :key="node.test_id"
           class="node-card"
           :class="node.status"
@@ -95,6 +136,11 @@
             <el-tag :type="nodeTagType(node.status)" size="small">{{ nodeStatusText(node.status) }}</el-tag>
           </div>
           <div class="node-body">
+            <div class="node-error" v-if="node.error_message">
+              <el-tooltip :content="node.error_message" placement="top">
+                <el-tag type="danger" size="small" effect="dark">启动失败</el-tag>
+              </el-tooltip>
+            </div>
             <div class="node-temp" v-if="node.currentTemp">
               🌡️ {{ node.currentTemp }}°C
             </div>
@@ -129,7 +175,7 @@
           <TempChart :data="temperatureData" />
         </el-tab-pane>
         <el-tab-pane label="每轮时间分布" name="timing">
-          <LoopTimingChart :data="loopTimingData" />
+          <LoopTimingChart :data="loopTimingData" :summary="loopTimingSummary" />
         </el-tab-pane>
         <el-tab-pane label="模块日志" name="moduleLog">
           <div class="module-toolbar">
@@ -149,9 +195,10 @@
 </template>
 
 <script setup lang="ts">
+defineOptions({ name: 'ClusterAgingView' })
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Refresh } from '@element-plus/icons-vue'
+import { Search, Refresh, Delete } from '@element-plus/icons-vue'
 import LogViewer from '@/components/LogViewer.vue'
 import TempChart from '@/components/TempChart.vue'
 import LoopTimingChart from '@/components/LoopTimingChart.vue'
@@ -162,15 +209,23 @@ const scanForm = reactive({ startIp: '10.80.40.1', endIp: '10.80.40.254' })
 const scanning = ref(false)
 const starting = ref(false)
 const refreshing = ref(false)
+const resuming = ref(false)
 const discoveredDevices = ref<any[]>([])
 const selectedDevices = ref<any[]>([])
 const deviceTableRef = ref()
 
 const clusterParams = reactive({ loop: 1, reboot: 0, writeOem: false })
-const clusterId = ref('')
-const clusterStatus = ref('')
-const clusterNodes = ref<any[]>([])
-const summary = reactive({ total: 0, completed: 0, failed: 0 })
+
+// 多集群支持
+interface ActiveCluster {
+  clusterId: string
+  testType: string
+  status: string
+  nodes: any[]
+  summary: { total: number; completed: number; failed: number; running: number }
+  _resuming?: boolean
+}
+const activeClusters = ref<ActiveCluster[]>([])
 
 const detailVisible = ref(false)
 const selectedNode = ref<any>(null)
@@ -179,6 +234,7 @@ const nodeLogs = ref<any[]>([])
 const nodeSyslogs = ref<any[]>([])
 const temperatureData = ref<any[]>([])
 const loopTimingData = ref<any[]>([])
+const loopTimingSummary = ref<any>(null)
 
 // AI 分析
 const aiChatRef = ref()
@@ -242,10 +298,23 @@ async function loadExistingClusters() {
   try {
     const res = await http.get('/tests/cluster')
     const clusters = (res as any).clusters || []
-    if (clusters.length > 0) {
-      const latest = clusters[clusters.length - 1]
-      clusterId.value = latest.cluster_id
-      await refreshCluster()
+    // 加载所有活跃集群和已结束的集群（已结束的可以手动清除）
+    const active = clusters.filter((c: any) =>
+      c.status === 'running' || c.status === 'interrupted' || c.status === 'completed' || c.status === 'failed'
+    )
+    for (const c of active) {
+      const detail: any = await http.get(`/tests/cluster/${c.cluster_id}`)
+      activeClusters.value.push({
+        clusterId: c.cluster_id,
+        testType: c.test_type,
+        status: detail.status,
+        nodes: detail.nodes || [],
+        summary: detail.summary || { total: 0, completed: 0, failed: 0, running: 0 },
+      })
+    }
+    // 只对运行中或中断的集群开启轮询
+    if (activeClusters.value.some(c => c.status === 'running' || c.status === 'interrupted')) {
+      refreshTimer = setInterval(refreshAllClusters, 5000)
     }
   } catch (e) {}
 }
@@ -319,7 +388,7 @@ async function startCluster() {
   try {
     const devices = selectedDevices.value.map((d: any) => ({
       ip: d.ip,
-      params: { loop: clusterParams.loop, reboot: clusterParams.reboot },
+      params: { loop: clusterParams.loop, reboot: clusterParams.reboot, chip_model: d.chip_model || 'bm1688' },
     }))
     const res: any = await http.post('/tests/cluster', {
       test_type: 'se9_aging_test',
@@ -327,49 +396,100 @@ async function startCluster() {
       devices,
       write_oem: clusterParams.writeOem,
     })
-    clusterId.value = res.cluster_id
-    clusterStatus.value = res.status
 
     // 启动集群
-    await http.post(`/tests/cluster/${clusterId.value}/start`)
-    clusterStatus.value = 'running'
+    await http.post(`/tests/cluster/${res.cluster_id}/start`)
 
-    ElMessage.success(`集群老化已启动: ${clusterId.value}`)
-    await refreshCluster()
+    // 加入活跃列表
+    const detail: any = await http.get(`/tests/cluster/${res.cluster_id}`)
+    activeClusters.value.push({
+      clusterId: res.cluster_id,
+      testType: 'se9_aging_test',
+      status: 'running',
+      nodes: detail.nodes || [],
+      summary: detail.summary || { total: 0, completed: 0, failed: 0, running: 0 },
+    })
 
-    // 定时刷新
-    refreshTimer = setInterval(refreshCluster, 5000)
+    ElMessage.success(`老化测试已启动: ${res.cluster_id}`)
+
+    // 启动定时刷新（如果还没启动）
+    if (!refreshTimer) {
+      refreshTimer = setInterval(refreshAllClusters, 5000)
+    }
   } catch (e: any) {
-    ElMessage.error('启动集群失败: ' + (e?.detail || '未知错误'))
+    ElMessage.error('启动失败: ' + (e?.detail || '未知错误'))
   }
   starting.value = false
 }
 
-async function stopCluster() {
-  if (!clusterId.value) return
-  try {
-    await http.post(`/tests/cluster/${clusterId.value}/stop`)
-    clusterStatus.value = 'stopped'
-    if (refreshTimer) clearInterval(refreshTimer)
-    ElMessage.warning('集群已停止')
-  } catch (e: any) {
-    ElMessage.error('停止失败: ' + (e?.detail || '未知错误'))
+async function refreshAllClusters() {
+  // 刷新所有活跃集群，移除已完成的
+  const stillActive: ActiveCluster[] = []
+  for (const cluster of activeClusters.value) {
+    try {
+      const res: any = await http.get(`/tests/cluster/${cluster.clusterId}`)
+      const status = res.status
+      if (status === 'completed' || status === 'failed' || status === 'stopped') {
+        continue // 已结束，不再显示
+      }
+      stillActive.push({
+        ...cluster,
+        status,
+        nodes: res.nodes || [],
+        summary: res.summary || cluster.summary,
+      })
+    } catch (e) {
+      // API 调用失败时保留现有集群状态，避免因网络抖动导致监控卡片消失
+      stillActive.push(cluster)
+    }
+  }
+  activeClusters.value = stillActive
+  // 当所有集群结束时停止轮询
+  if (stillActive.length === 0 && refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
   }
 }
 
-async function refreshCluster() {
-  if (!clusterId.value) return
-  refreshing.value = true
+async function dismissCluster(clusterId: string) {
   try {
-    const res: any = await http.get(`/tests/cluster/${clusterId.value}`)
-    clusterNodes.value = res.nodes || []
-    clusterStatus.value = res.status
-    Object.assign(summary, res.summary || {})
-    if (res.status === 'completed' || res.status === 'failed' || res.status === 'stopped') {
-      if (refreshTimer) clearInterval(refreshTimer)
+    await http.delete(`/tests/cluster/${clusterId}`)
+    activeClusters.value = activeClusters.value.filter(c => c.clusterId !== clusterId)
+    ElMessage.success('已清除')
+    if (activeClusters.value.length === 0 && refreshTimer) {
+      clearInterval(refreshTimer)
+      refreshTimer = null
     }
+  } catch (e: any) {
+    ElMessage.error('清除失败: ' + (e?.detail || '未知错误'))
+  }
+}
+
+async function refreshSingleCluster(cluster: ActiveCluster) {
+  try {
+    const res: any = await http.get(`/tests/cluster/${cluster.clusterId}`)
+    cluster.status = res.status
+    cluster.nodes = res.nodes || []
+    cluster.summary = res.summary || cluster.summary
   } catch (e) {}
-  refreshing.value = false
+}
+
+async function resumeCluster(clusterId: string) {
+  const cluster = activeClusters.value.find(c => c.clusterId === clusterId)
+  if (!cluster) return
+  cluster._resuming = true
+  try {
+    await http.post(`/tests/cluster/${clusterId}/resume`)
+    ElMessage.success('监控已恢复')
+    // 刷新该集群状态
+    await refreshSingleCluster(cluster)
+    if (!refreshTimer) {
+      refreshTimer = setInterval(refreshAllClusters, 5000)
+    }
+  } catch (e: any) {
+    ElMessage.error('恢复失败: ' + (e?.detail || '未知错误'))
+  }
+  cluster._resuming = false
 }
 
 function mapLogLines(rawLines: any[], source: string): any[] {
@@ -405,14 +525,25 @@ async function fetchNodeSyslog(testId: string) {
 async function fetchNodeTemperature(testId: string) {
   try {
     const res: any = await http.get(`/tests/${testId}/temperature`)
-    temperatureData.value = res.data || []
+    // log_parser 返回 {data: [{time, temp_c, aging_sec}], ...}，TempChart 需要 {time, temp}
+    temperatureData.value = (res.data || []).map((d: any) => ({ time: d.time, temp: d.temp_c || d.temp }))
   } catch (e) {}
 }
 
 async function fetchNodeLoopTiming(testId: string) {
   try {
     const res: any = await http.get(`/tests/${testId}/loop-timing`)
-    loopTimingData.value = res.data || []
+    // log_parser 返回 {aging_loops: [{loop, duration_sec, status}], ...}
+    loopTimingData.value = (res.aging_loops || res.data || []).map((l: any) => ({
+      loop: l.loop,
+      duration: l.duration_sec || l.duration || 0,
+      status: l.status || (l.duration > 0 ? 'pass' : 'running'),
+    }))
+    loopTimingSummary.value = {
+      total_loops: res.total_loops || 0,
+      reboot_cycles: res.reboot_cycles || 0,
+      is_running: res.is_running || false,
+    }
   } catch (e) {}
 }
 
@@ -458,19 +589,24 @@ function refreshNodeDetail() {
 }
 
 function nodeTagType(status: string) {
-  const map: Record<string, string> = { running: 'warning', completed: 'success', failed: 'danger', pending: 'info' }
+  const map: Record<string, string> = { running: 'warning', completed: 'success', failed: 'danger', pending: 'info', interrupted: 'warning', unknown: 'info' }
   return map[status] || 'info'
 }
 
 function nodeStatusText(status: string) {
-  const map: Record<string, string> = { running: '运行中', completed: '完成', failed: '失败', pending: '等待', stopped: '已停止' }
+  const map: Record<string, string> = { running: '运行中', completed: '完成', failed: '失败', pending: '等待', stopped: '已停止', interrupted: '已中断', unknown: '未知' }
   return map[status] || status
 }
 
-const statusTagType = computed(() => {
-  const map: Record<string, string> = { running: 'warning', completed: 'success', failed: 'danger', pending: 'info' }
-  return map[clusterStatus.value] || 'info'
-})
+function statusTagType(status: string) {
+  const map: Record<string, string> = { running: 'warning', completed: 'success', failed: 'danger', pending: 'info', interrupted: 'warning', unknown: 'info' }
+  return map[status] || 'info'
+}
+
+function statusText(status: string) {
+  const map: Record<string, string> = { running: '运行中', completed: '完成', failed: '失败', pending: '等待', stopped: '已停止', interrupted: '已中断', unknown: '未知' }
+  return map[status] || status
+}
 </script>
 
 <style scoped>
@@ -486,6 +622,16 @@ const statusTagType = computed(() => {
   margin-bottom: 16px;
   background-color: var(--bg-card);
   border-color: var(--border-color);
+}
+.cluster-card-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cluster-card-title {
+  font-weight: 600;
+  font-size: 14px;
 }
 .scan-hint {
   font-size: 12px;
@@ -532,6 +678,10 @@ const statusTagType = computed(() => {
   color: #f56c6c;
   margin-bottom: 4px;
 }
+.node-error {
+  margin-bottom: 4px;
+  cursor: help;
+}
 .node-step {
   margin-top: 4px;
 }
@@ -554,4 +704,37 @@ const statusTagType = computed(() => {
   font-size: 12px;
   color: var(--text-secondary);
 }
+.chip-info {
+  display: inline-block;
+  background: #e6f7ff;
+  color: #1890ff;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  margin-left: 6px;
+}
+.module-info {
+  display: inline-block;
+  background: #fff7e6;
+  color: #fa8c16;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  margin-left: 4px;
+}
+.ddr-info {
+  display: inline-block;
+  background: #f6ffed;
+  color: #52c41a;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  margin-left: 4px;
+}
+.sdk-info {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+}
+.text-muted { color: #999; }
 </style>
