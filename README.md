@@ -5,7 +5,7 @@
 ## 架构
 
 ```
-web_product_test/
+product_test/
 ├── backend/          # FastAPI 后端 (Python)
 │   ├── api/          # REST API 路由
 │   ├── engine/       # SSH/串口/SCP 设备通信层
@@ -19,9 +19,9 @@ web_product_test/
 │       ├── views/    # 页面视图
 │       └── stores/   # Pinia 状态管理
 ├── cfg/              # 测试配置（产品型号、测试用例）
-├── data/             # 运行时数据（SQLite 数据库）
-├── log/              # 测试日志
-└── start.sh          # 一键启动脚本
+├── data/             # 运行时数据（SQLite 数据库、SN 抓拍图）
+├── mediamtx.yml      # MediaMTX 配置（WebRTC 预览中继）
+└── start.sh          # 一键启动脚本（前端构建 + MediaMTX + 后端）
 ```
 
 ## 技术栈
@@ -32,8 +32,9 @@ web_product_test/
 | 后端 | Python 3.10+, FastAPI, uvicorn |
 | 数据库 | SQLite (SQLAlchemy ORM) |
 | 设备通信 | paramiko (SSH), pyserial (串口) |
-| AI 分析 | DeepSeek API + Claude CLI |
 | 实时推送 | WebSocket |
+| 预览中继 | MediaMTX (RTMP → WebRTC) |
+| AI 分析 | DeepSeek API + Claude CLI |
 
 ## 功能特性
 
@@ -42,68 +43,123 @@ web_product_test/
 - **集群老化**：多设备并行老化测试，统一管理
 - **实时监控**：WebSocket 实时推送测试步骤、日志、状态
 - **系统日志**：通过 SSH + journalctl 实时采集设备系统日志
-- **AI 分析**：
-  - 快速分析（DeepSeek API）— 错误检测、温度分析、性能评估
-  - 深度分析（Claude CLI）— 全面日志审查、优化建议
+- **AI 分析**：快速分析（DeepSeek API）/ 深度分析（Claude CLI）
 - **历史数据**：SQLite 存储全部测试结果，支持多条件查询和统计
-- **SN 抓拍**：SE9 识别到 SN 时抓取设备图入库，前端按 SN / 日期查询并查看
-- **调机预览**：板子双路相机实时 MJPEG 画面中继到网页，调镜头时用；只读回显最近抓拍
-- **暗色主题**：支持亮色/暗色主题切换
+- **SN 抓拍**：SE9 识别到 SN 时抓取设备图入库，前端按 SN / 日期查询查看（详见下方「SN 抓拍」节）
+- **调机预览**：板子双路相机实时画面中继到网页，调镜头时用（详见下方「调机预览」节）
+- **暗色主题**：亮色/暗色主题切换
 
-## 快速开始
+---
+
+## 环境部署
 
 ### 环境要求
 
 - Python 3.10+
-- Node.js 18+
-- npm 9+
+- Node.js 18+ / npm 9+
+- MediaMTX（WebRTC 预览用，见下方 §MediaMTX 部署）
 
-### 1. 克隆仓库
+### 1. 克隆 + 安装依赖
 
 ```bash
 git clone git@github.com:Xuan-yangyi/product_test.git
 cd product_test
-```
 
-### 2. 安装后端依赖
+# 后端依赖
+cd backend && pip install -r requirements.txt && cd ..
 
-```bash
-cd backend
-pip install -r requirements.txt
-```
+# 前端依赖
+cd frontend && npm install && cd ..
 
-### 3. 配置 AI 分析（可选）
-
-```bash
+# AI 分析配置（可选）
 cp cfg/ai_config.json.example cfg/ai_config.json
 # 编辑 cfg/ai_config.json，填入 API 地址和密钥
 ```
 
-### 4. 安装前端依赖
+### 2. MediaMTX 部署
+
+调机预览链路是：**板子 ffmpeg 推 RTMP → 本机 MediaMTX 转 WebRTC → 浏览器 `<video>`**。MediaMTX 做纯协议转换（零编码），由 `start.sh` 自动拉起。
+
+**安装（仅首次，本机 x86_64）**：
 
 ```bash
-cd frontend
-npm install
+cd /tmp && wget https://github.com/bluenviron/mediamtx/releases/download/v1.8.0/mediamtx_v1.8.0_linux_amd64.tar.gz
+sudo mkdir -p /opt/mediamtx && sudo tar xzf mediamtx_v1.8.0_linux_amd64.tar.gz -C /opt/mediamtx/
 ```
 
-### 5. 启动开发环境
+**配置 `mediamtx.yml`（可修改说明）**：
+
+```yaml
+rtmp: yes
+rtmpAddress: :1935          # 板子推流入口；改端口要同步改板子侧 deploy/preview_supervisor.sh 的 RTMP 目标
+webrtc: yes
+webrtcAddress: :8889        # 浏览器 WHEP 端点；改端口要同步改 backend/api/camera.py 的 WHEP 代理目标
+api: yes                    # :9997，查流状态：curl 127.0.0.1:9997/v3/paths/list
+srt: no                     # 故意关掉，避端口 8000 冲突
+logLevel: info
+paths:
+  cam_front:                # 增加相机就加一个 path
+    source: publisher
+    sourceOnDemand: no      # 常驻等推流（no = 不按需启动）
+  cam_back:
+    source: publisher
+    sourceOnDemand: no
+```
+
+> 改任意端口/path 后，板子侧推流地址与后端 WHEP 代理目标要对应改。板子侧部署见 SN 抓拍板子仓库（链接见下方「SN 抓拍」节）。
+
+### 3. 启动
 
 ```bash
-# 终端 1 — 启动后端 (端口 8080)
-cd backend
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --reload
+# 开发模式（前后端分离，热重载）
+cd backend && python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --reload   # 终端1
+cd frontend && npm run dev                                                       # 终端2，端口 5173
 
-# 终端 2 — 启动前端 (端口 5173)
-cd frontend
-npm run dev
+# 生产模式（一键：构建前端 + 起 MediaMTX + 起后端 :8099）
+chmod +x start.sh && ./start.sh
 ```
 
-### 6. 生产部署
+`start.sh` 依次做：① `npm run build` 构建前端 → ② `pkill -f mediamtx` 后用 `mediamtx.yml` 起 MediaMTX（`trap` 随脚本退出清理）→ ③ `uvicorn backend.main:app --port 8099`。
+日志：MediaMTX → `mediamtx_run.log`，后端 → `uvicorn_8099.log`。
 
-```bash
-chmod +x start.sh
-./start.sh
+---
+
+## SN 抓拍
+
+SE9 识别到设备 SN 时，把 **SN + 命中帧设备图**推送到本系统入库；前端「SN 抓拍」页按 **SN + 入库日期范围**查询查看。v2.1 起支持正/反两面（一次命中同时抓正、背两张图，前端一张卡片并排显示）。该特性加法式，独立于老化测试。
+
+- **落盘**：图片 `data/sn_captures/<SN>/<时间戳>_<side>.<jpg|png>`；元数据入 `data/results.db` 的独立表 `sn_captures`。
+- **上传接口**：`POST /api/v1/captures`（multipart：`sn` 必填、`score`、`ts`、`side`、`image`）。
+- **查询接口**：`GET /api/v1/captures`（`sn` / `start` / `end` / `limit` / `offset`）、`GET /api/v1/captures/{id}/image`。
+
+> **板子侧（抓拍来源）部署与原理**不在本仓库，见 SN 抓拍板子端项目：
+> <https://github.com/jokerliu223/sn_monitor_bm1688>
+> 该仓库 README 讲板子侧环境部署、相机接法、systemd 单元、IP 改动对照；DB 表字段、`side` 列升级（`ALTER TABLE`）等细节见其 `docs/features/dual-camera.md`。
+
+---
+
+## 调机预览
+
+前端「调机预览」页把板子两路相机的实时画面中继到网页，用来**调镜头位置/焦距**。链路：
+
 ```
+浏览器 <video>  ←WebRTC←  本机 MediaMTX :8889  ←RTMP←  板子 ffmpeg(h264_bm)  ←RTSP←  相机
+```
+
+后端只做 WHEP 代理（`/api/v1/camera/webrtc/*` → `127.0.0.1:8889`），不让浏览器直连板子——板子网段对办公网不直接暴露，中继后换调机电脑零配置。板子地址默认 `http://10.80.40.68:8090`（环境变量 `PREVIEW_BOARD_BASE` 可覆盖，见下方 IP 表）。
+
+### 相关 API
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/camera/webrtc/config` | GET | 返回 WebRTC 配置 |
+| `/api/v1/camera/webrtc/whep/{cam}` | POST | WHEP 代理：转发浏览器 SDP offer 到本地 MediaMTX |
+| `/api/v1/camera/status` | GET | 双路相机状态 |
+| `/api/v1/camera/latest-capture` | GET | 板子最近一次抓拍元信息（只读回显） |
+
+> ⚠️ **中继路由必须用异步生成器**：`backend/api/camera.py` 的 MJPEG 中继路由与内部生成器必须 `async def` + `httpx.AsyncClient`，关闭上游用 `anyio.CancelScope(shield=True)`。写成同步生成器会在浏览器断开时泄漏上游连接，实测可把服务器拖死（soft lockup）。改这块时不要退回同步写法。
+
+---
 
 ## API 概览
 
@@ -120,6 +176,8 @@ chmod +x start.sh
 | `/api/v1/ai/analyze/{id}` | POST | AI 快速分析 |
 | `/api/v1/ai/claude-analyze/{id}` | POST | Claude 深度分析 |
 | `/api/v1/cluster` | GET/POST | 集群管理 |
+| `/api/v1/captures` | GET/POST | SN 抓拍（见上） |
+| `/api/v1/camera/*` | GET/POST | 调机预览（见上） |
 | `/api/v1/ws/{test_id}` | WebSocket | 实时推送 |
 
 ## 配置说明
@@ -129,144 +187,27 @@ chmod +x start.sh
 - `test_case_config.ini` — 测试用例定义（步骤、参数、超时）
 - `ui_config.ini` — 前端页面配置（步骤标签、分组）
 - `show_config.ini` — 显示控制（哪些步骤需要展示）
-- `SE9_cfg/` — SE9 平台配置文件
+- `SE9_cfg/` / `SE12_cfg/` / `EVB_cfg/` — 各平台配置文件
 - `ai_config.json` — AI 分析配置（API 地址、密钥、模型）
+- `network_config.yaml` — 产测网段
 
 详细配置格式见各文件注释。
 
-## SN 抓拍（设备图片内容）
+---
 
-SE9 识别到设备 SN 时，把 **SN + 命中帧设备图**推送到本系统入库；前端「SN 抓拍」页可按
-**SN + 入库日期范围**查询并查看对应设备图。该特性完全加法式，独立于老化测试（不改
-`db_models.py` / `TestRecord` / 老化视图）。
+## IP / 配置改动对照表
 
-> **v2.1 正/反两面**：SE9 侧可再加一路背面摄像头，一次命中同时抓正、背两张图（同一
-> `captured_at`）。上传时多带一个 `side` 字段（`front` / `back`），DB 一行一图，前端按
-> `(sn, captured_at)` 归组、**一张卡片并排显示正/背**。旧客户端不带 `side` 也能传，默认按
-> 正面处理，完全向后兼容。
+| 改什么 | 文件 : 位置 | 现默认值 | 备注 |
+|--------|-------------|----------|------|
+| **板子 IP（预览中继源）** | `backend/api/camera.py:35` | `http://10.80.40.68:8090` | 环境变量 `PREVIEW_BOARD_BASE` 可覆盖；**此值为预览链路实际连的板子** |
+| **后端监听端口** | `start.sh` 末行（生产）/ uvicorn 命令（开发） | `8099`（开发 `8080`） | |
+| **前端开发端口** | Vite 默认 `5173`（未在 `vite.config.ts` 显式设置） | `5173` | 仅开发模式 |
+| **前端→后端代理目标（开发）** | `frontend/vite.config.ts`（`server.proxy` 的 `/api`、`/ws`） | `http://localhost:8080` | 改开发后端端口要同步改这里 |
+| **MediaMTX 端口** | `mediamtx.yml` | RTMP `:1935` / WebRTC `:8889` / API `:9997` | 改端口要同步改板子侧推流 + 后端 WHEP 代理 |
+| **集群 / 接口测试扫描网段** | `frontend/src/views/ClusterAgingView.vue`<br>`frontend/src/views/InterfaceTestView.vue` | `10.80.40.1` ~ `10.80.40.254` | 扫描表单默认值 |
+| **产测网段** | `cfg/network_config.yaml` | `192.168.1.0` | |
 
-### 图片与数据的落盘位置 / 形式
-
-| 内容 | 路径 / 形式 |
-|------|-------------|
-| 图片文件 | `data/sn_captures/<SN>/<时间戳>_<side>.<jpg\|png>`（按 SN 分目录，一张一文件；`side` 为 `front`/`back`，同一命中正反同秒也不会互相覆盖） |
-| 数据库 | `data/results.db`（与老化共用同一 SQLite），独立表 **`sn_captures`** |
-| DB 中的图片引用 | 表字段 `image_path` 只存**相对 DATA_DIR 的路径**，取图接口据此拼绝对路径返回文件 |
-
-`sn_captures` 表字段：
-
-| 字段 | 含义 |
-|------|------|
-| `id` | 主键 |
-| `sn` | 设备序列号（索引） |
-| `image_path` | 设备图相对路径（相对 `data/`） |
-| `score` | 识别置信度 |
-| `captured_at` | SE9 实际抓拍时间（板子时钟，可能为空） |
-| `source` | 来源，默认 `SE9` |
-| `side` | v2.1 正/反面：`front` \| `back`，默认 `front`（旧数据/旧客户端不带即正面） |
-| `uploaded_at` | 入库时间（服务器时钟，自动，永不为空）——**日期范围筛选即按此字段** |
-
-> ⚠️ **升级已有部署时需一次性补列**：`side` 是新增列，而 SQLAlchemy 的 `create_all` **只建表不做 ALTER**，
-> 已有 `data/results.db` 不会自动多出这一列，接口会报 `no such column: sn_captures.side`。升级步骤：
-> ```bash
-> cp data/results.db data/results.db.bak_$(date +%Y%m%d_%H%M%S)   # 先备份
-> sqlite3 data/results.db "ALTER TABLE sn_captures ADD COLUMN side VARCHAR(8) NOT NULL DEFAULT 'front';"
-> ```
-> 已存在的行会取默认值 `front`，正好等价于"老数据都是正面"，无需回填。
-
-### 相关 API（均为新增，加法式）
-
-| 路径 | 方法 | 说明 |
-|------|------|------|
-| `/api/v1/captures` | POST | SE9 上传：multipart `sn`(必填)、`score`、`ts`、`side`(v2.1，`front`/`back`，缺省 `front`；未知值兜底 `front` 不报错)、`image`(jpeg/png, <20MB) |
-| `/api/v1/captures` | GET | 查询：`sn`、`start`/`end`(入库日期 YYYY-MM-DD，含当天)、`limit`、`offset`；返回 `{total, items[...image_url, uploaded_at]}` |
-| `/api/v1/captures/{id}/image` | GET | 返回该条抓拍的设备图文件 |
-
-## 调机预览（双路摄像头实时画面）
-
-前端「调机预览」页把板子上两路摄像头的实时画面中继到网页，用来**调镜头位置/焦距**；
-页面底部只读回显板子最近一次抓拍，方便核对识别结果。与 SN 抓拍一样是**加法式**特性，
-不落库、不写文件、不碰 `sn_results`。
-
-### 链路
-
-```
-浏览器 <img>  ←→  .57 :8099 /api/v1/camera/stream  ←→  板子 :8090 /stream  ←→  相机
-   (同源)                (本模块，纯转发)                  (MJPEG 生成)      (RTSP)
-```
-
-中继一跳而不让浏览器直连板子：板子网段对办公网不直接暴露、直连要额外开跨域，
-每换一台调机电脑都得改配置。中继后浏览器只说同源的话，换电脑零配置。
-
-板子地址默认 `http://10.80.40.53:8090`，换板子时设环境变量 `PREVIEW_BOARD_BASE` 覆盖。
-
-### 板子侧服务
-
-预览**内嵌在识别服务里**（`sn_monitor.py` + `sn_preview_embed.py`），与 SN 识别
-**同进程、共享同一路相机解码**。相机是**单客户端源**，多开一路 RTSP 会把原来那路踢死，
-所以共享解码是硬约束，不是优化。
-
-```bash
-# 起停预览 = 起停识别服务（无需单独操作预览）
-sudo systemctl restart sn-monitor-big     # big 档
-sudo systemctl status  sn-monitor-big
-tail -f /data/soph_SN/logs/sn_monitor.service.log
-```
-
-板子侧详细说明见板子 `/data/soph_SN/README.md` 与同目录 `preview_service_README.md`。
-V1/V2 的独立预览服务 `preview_service.py` 已停用保留（不部署）。
-
-### 分辨率档位与延迟
-
-档位 `4k` / `1080p` / `720p` / `360p`，**默认 1080p**，页面上可随时切换
-（切档会调 `/api/v1/camera/resolution` 并强制前端重连流）。
-
-| 档位 | 带宽（单路） | 编码耗时 | 实测观感延迟 |
-|------|-------------|---------|-------------|
-| 4K | ~84 Mbps | ~178 ms/帧（≈5.7 fps，受编码限制未达 8 fps 上限） | 约 1.5–2 s |
-| 1080p | ~4.3 MB/s | ~130 ms/帧（≈7.7 fps） | 约 1 s |
-
-> **延迟是链路固有成本，不是缺陷。** 构成：板子解码+JPEG 编码（130–178 ms）
-> + 板子→.57 传输（1080p 约 0.4 s）+ 浏览器多部分解码与缓冲。
-> 默认取 1080p 是因为它在「细节够核对 SN」和「基本实时」之间最平衡；
-> 要看清铭牌小字时临时切 4K，看完切回即可。
-
-### 前端重连机制
-
-`<img>` 一旦 `error` 就不会自己重试，页面靠**每 5s 的 keepAlive** 检查：有失败路才换
-`_t` 令牌强制重连（`_t` 是防缓存的一次性令牌，URL 不变浏览器会复用旧连接）。切换档位、
-点「重连画面」同样换 `_t`。板子那边 `age > 5s` 会让卡片显示「画面停滞」。
-
-### API（均为新增，加法式）
-
-| 路径 | 方法 | 说明 |
-|------|------|------|
-| `/api/v1/camera/status` | GET | 双路相机状态：`source_ok`、`frames`、`seq`、`age`、`avg_ms` 等 |
-| `/api/v1/camera/stream` | GET | MJPEG 实时流；`cam`(`front`\|`back`)、`res`(档位，缺省板子默认) |
-| `/api/v1/camera/snapshot` | GET | 单张抓拍，MJPEG 放不出来时的兜底 |
-| `/api/v1/camera/resolution` | GET | 切换分辨率档位，`res` 必填 |
-| `/api/v1/camera/latest-capture` | GET | 板子最近一次抓拍元信息；没有时 `has=false`（正常空态） |
-| `/api/v1/camera/latest-capture/image` | GET | 回显图本体（直通转发 JPEG 字节） |
-
-板子侧没起服务 / 网络不通时统一返回 **503**（带排查提示），不会把 500 抛给浏览器。
-
-### ⚠️ 中继必须用异步生成器（BUG-001）
-
-`backend/api/camera.py` 的 `/stream` 路由**必须**是 `async def`，内部生成器**必须**是
-`async def` + `httpx.AsyncClient`，关闭上游时**必须**用 `anyio.CancelScope(shield=True)`。
-写成同步生成器会造成**连接泄漏**，实测可把服务器拖死：
-
-- 原因：同步生成器由 `iterate_in_threadpool` 驱动，即把 `next()` 丢进 anyio 工作线程。
-  anyio 3 的 `to_thread.run_sync` 默认 `cancellable=False` —— 浏览器断开触发的取消
-  要等那个线程自己返回才落地，而线程正阻塞在 `read=None` 的无限 socket 读上，永不返回。
-  取消被无限期推迟 → `finally` 不执行 → 上游 TCP 连接与 httpx 客户端双双泄漏。
-- 实测：10 轮「每路拉 2s 后断开」（模拟刷新/切档）后，板子 `:8090` 连接 **0 → 26**
-  （积压 38.5 MB，一条不释放），`.57` **FD 38 → 64**、**RSS 234 → 293 MB**；
-  干净 `close()` 后 30s 连接仍 `ESTAB`。
-- 崩溃现场：`.57` 曾有 17 条这样的 4K 连接（单路 84 Mbps），随后内核报
-  `soft lockup - CPU#5 stuck for 22s! [libuv-worker]`，服务器失联需重启。
-
-改动这一处时不要退回同步写法；`shield` 也不能省（取消已在进行中时裸 `await` 会被立刻打断）。
+> **换 MediaMTX / 本服务器 IP**：本机 IP（`.57`）本身不写在本仓库，而写在**板子侧**仓库：RTMP 推流目标在 `deploy/preview_supervisor.sh`，上传目标在 `deploy/sn-uploader.service` / `tools/sn_uploader.py`。换服务器要改板子那边。
 
 ## License
 
