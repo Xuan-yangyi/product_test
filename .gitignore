@@ -41,3 +41,4 @@ frontend/dist/
 *.bak_*
 *.log
 *.pre_*
+cfg/webserver.env
