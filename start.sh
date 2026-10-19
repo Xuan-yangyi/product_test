@@ -13,7 +13,7 @@ cd "$FRONTEND_DIR" && npm run build
 pkill -f mediamtx 2>/dev/null; sleep 1  # 先杀旧进程, 再起新的
 if [ -x /opt/mediamtx/mediamtx ]; then
   echo "=== Starting MediaMTX ==="
-  /opt/mediamtx/mediamtx /media/cvitek/xiaohao.liu/product_test/mediamtx.yml &
+  ( /opt/mediamtx/mediamtx /media/cvitek/xiaohao.liu/product_test/mediamtx.yml & )
   MEDIAMTX_PID=$!
   trap "kill $MEDIAMTX_PID 2>/dev/null; exit" EXIT INT TERM
   sleep 2
