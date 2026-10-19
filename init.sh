@@ -18,7 +18,7 @@ echo ""
 echo "── Phase 0: 网络检查 ──"
 MY_IP=$(ip -4 -br addr show eth0 2>/dev/null | awk "{print \$3}" || echo "未知")
 echo "  本机 IP: ${MY_IP:-未知}"
-ping -c1 -W2 114.114.114.114 >/dev/null 2>&1 && echo -e "  ${GREEN}✅ 互联网连通${NC}" || echo -e "  ${YELLOW}⚠ 无互联网${NC}"
+ping -c1 -W2 github.com >/dev/null 2>&1 && echo -e "  ${GREEN}✅ 互联网连通${NC}" || echo -e "  ${YELLOW}⚠ 无互联网${NC}"
 
 # ── Phase 1: 环境安装 ──
 echo ""
