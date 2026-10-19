@@ -31,14 +31,14 @@ async def scan_serial_devices(dm: DeviceManager = Depends(get_device_manager)):
 
 
 @router.post("/devices/network/scan")
-async def batch_scan_ips(req: ScanRequest, dm: DeviceManager = Depends(get_device_manager)):
+def batch_scan_ips(req: ScanRequest, dm: DeviceManager = Depends(get_device_manager)):
     """批量扫描 IP 地址，检测在线设备"""
     devices = dm.batch_scan_ips(req.ips)
     return {"devices": devices}
 
 
 @router.get("/devices/network")
-async def scan_network_devices(dm: DeviceManager = Depends(get_device_manager)):
+def scan_network_devices(dm: DeviceManager = Depends(get_device_manager)):
     """扫描网络设备"""
     devices = dm.scan_network_devices()
     return {"devices": devices}

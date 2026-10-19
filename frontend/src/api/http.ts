@@ -10,8 +10,12 @@ const http = axios.create({
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    const msg = error.response?.data?.detail || error.message || '请求失败'
-    ElMessage.error(msg)
+    // silent: 后台轮询类请求（如 camera 状态探活）失败不弹全局 toast，
+    // 否则板子离线时每次轮询都弹一次 = 界面刷屏。由调用方显式标记。
+    if (!error.config?.silent) {
+      const msg = error.response?.data?.detail || error.message || '请求失败'
+      ElMessage.error(msg)
+    }
     return Promise.reject(error)
   },
 )
