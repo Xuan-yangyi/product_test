@@ -31,11 +31,27 @@ class DeviceManager:
         info = {"device_type": "", "chip_model": "", "ddr_capacity": "", "module_type": "", "sdk_version": ""}
         try:
             ssh = SSHClient()
-            if not ssh.connect(ip, user="linaro", password="linaro", timeout=5):
+            # quiet=True: 网段内非板卡主机连接失败属预期，不打 ERROR 日志
+            if not ssh.connect(ip, user="linaro", password="linaro", timeout=2, quiet=True):
                 return info
 
+            # 三条命令合并为一次 exec_cmd（单 channel、单次 sudo），减少往返
+            # 用分隔标记切分结果：SHOW_DDR / OEMCONFIG / BM_VERSION
+            MARK = "___SN_MONITOR_SPLIT___"
+            merged_cmd = (
+                f"show_ddr 2>/dev/null; echo {MARK}; "
+                f"cat /factory/OEMconfig.ini 2>/dev/null; echo {MARK}; "
+                f"bm_version 2>/dev/null"
+            )
+            merged_out, _, _ = ssh.exec_cmd(merged_cmd, timeout=15,
+                                            sudo=True, sudo_password="linaro")
+            parts = merged_out.split(MARK)
+            if len(parts) != 3:
+                # 设备命令异常时回退到原始单命令行为
+                parts = [merged_out, "", ""]
+            stdout, stdout2, stdout3 = parts[0], parts[1], parts[2]
+
             # 1. show_ddr — 芯片型号 & DDR 容量
-            stdout, _, _ = ssh.exec_cmd("show_ddr 2>/dev/null", timeout=10, sudo=True, sudo_password="linaro")
             out = stdout.strip()
             out_lower = out.lower()
             if "bm1688" in out_lower:
@@ -62,11 +78,7 @@ class DeviceManager:
                 if val > 0:
                     info["ddr_capacity"] = f"{val}GB"
 
-            # 2. OEMconfig.ini — MODULE_TYPE
-            stdout2, _, _ = ssh.exec_cmd(
-                "cat /factory/OEMconfig.ini 2>/dev/null", timeout=10,
-                sudo=True, sudo_password="linaro"
-            )
+            # 2. OEMconfig.ini — MODULE_TYPE（已在合并命令中取回）
             oem_out = stdout2.strip()
             if oem_out:
                 # 正则提取（跳过 flag 值如 INTERFACE_FLAG、0x01 等）
@@ -77,9 +89,7 @@ class DeviceManager:
                     if val not in ("INTERFACE_FLAG",) and not re.match(r'^0x[0-9a-fA-F]+$', val):
                         info["module_type"] = val
 
-            # 3. bm_version — SDK 版本，提取版本号如 "2.2"
-            stdout3, _, _ = ssh.exec_cmd("bm_version 2>/dev/null", timeout=10,
-                                         sudo=True, sudo_password="linaro")
+            # 3. bm_version — SDK 版本，提取版本号如 "2.2"（已在合并命令中取回）
             ssh.close()
             sdk_out = stdout3.strip()
             if sdk_out:
@@ -106,7 +116,7 @@ class DeviceManager:
             dev["module_type"] = info["module_type"]
             dev["sdk_version"] = info["sdk_version"]
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=32) as executor:
             futures = [executor.submit(detect, d) for d in devices]
             for future in as_completed(futures):
                 future.result()
@@ -125,16 +135,26 @@ class DeviceManager:
             return devices
 
         # 扫描网段（例如 192.168.1.）
+        # 并行探测：串行 254 个 IP × 2s 最坏 508s，改为 32 并发后约 16s
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         base_ip = network_segment.rsplit(".", 1)[0]
-        for i in range(1, 255):
-            ip = f"{base_ip}.{i}"
-            if SSHClient.is_ip_alive(ip, timeout=2):
-                devices.append({
-                    "ip": ip,
-                    "hostname": "",
-                    "status": "online",
-                    "device_type": "",
-                })
+        candidates = [f"{base_ip}.{i}" for i in range(1, 255)]
+
+        def probe(ip: str) -> dict | None:
+            # 先用 ICMP ping 判活，再确认 22 端口开放；两者都过才算候选设备，
+            # 避免把网关/办公 PC 等非产测主机当作设备去 SSH 探测
+            if not SSHClient.is_ip_alive(ip, timeout=2):
+                return None
+            if not SSHClient.is_ssh_alive(ip, timeout=1):
+                return None
+            return {"ip": ip, "hostname": "", "status": "online", "device_type": ""}
+
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            futures = [executor.submit(probe, ip) for ip in candidates]
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    devices.append(result)
 
         # 并行检测设备类型
         if devices:
@@ -147,9 +167,12 @@ class DeviceManager:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def check_ip(ip: str) -> dict | None:
-            if SSHClient.is_ip_alive(ip, timeout=timeout):
-                return {"ip": ip, "hostname": "", "status": "online", "device_type": ""}
-            return None
+            # ping 判活 + 22 端口确认，过滤掉网关/PC 等非产测主机
+            if not SSHClient.is_ip_alive(ip, timeout=timeout):
+                return None
+            if not SSHClient.is_ssh_alive(ip, timeout=1):
+                return None
+            return {"ip": ip, "hostname": "", "status": "online", "device_type": ""}
 
         devices = []
         with ThreadPoolExecutor(max_workers=20) as executor:

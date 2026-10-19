@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/v1/camera", tags=["camera"])
 
 # 板子预览服务地址。换板子/换端口时改这一个常量，或设环境变量覆盖。
 import os
-BOARD_BASE = os.environ.get("PREVIEW_BOARD_BASE", "http://10.80.40.68:8090")
+BOARD_BASE = os.environ.get("PREVIEW_BOARD_BASE", "http://10.80.40.68:8091")
 
 # MJPEG 是长连接：读超时必须关掉（None），否则 httpx 到点会自己掐断，
 # 表现就是网页画面每隔几秒黑一下。

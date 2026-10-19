@@ -28,7 +28,8 @@ class SSHClient:
         return self._client is not None and self._client.get_transport() is not None \
             and self._client.get_transport().is_active()
 
-    def connect(self, ip: str, user: str = "root", password: str = "", port: int = 22, timeout: int = 10) -> bool:
+    def connect(self, ip: str, user: str = "root", password: str = "", port: int = 22,
+                timeout: int = 10, quiet: bool = False) -> bool:
         """建立 SSH 连接（如果已有连接则先关闭，支持 reconnect）"""
         # 先关闭旧连接（支持 reconnect 场景）
         if self._client:
@@ -56,7 +57,8 @@ class SSHClient:
             logger.info(f"SSH 连接 {ip} 成功")
             return True
         except Exception as e:
-            logger.error(f"SSH 连接 {ip} 失败: {e}")
+            # 探测场景下连接失败属预期（网段内非板卡主机），quiet=True 时降为 debug
+            (logger.debug if quiet else logger.error)(f"SSH 连接 {ip} 失败: {e}")
             self._client = None
             return False
 
@@ -231,6 +233,16 @@ class SSHClient:
             self._client.close()
             self._client = None
         logger.info(f"SSH 连接 {self.ip} 已关闭")
+
+    @staticmethod
+    def is_ssh_alive(ip: str, timeout: int = 1) -> bool:
+        """检测 22 端口是否开放（比 ping 更贴近"是不是可 SSH 的设备"）"""
+        import socket
+        try:
+            with socket.create_connection((ip, 22), timeout=timeout):
+                return True
+        except Exception:
+            return False
 
     @staticmethod
     def is_ip_alive(ip: str, timeout: int = 3) -> bool:

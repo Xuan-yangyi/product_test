@@ -11,7 +11,11 @@
       <div class="spacer" />
       <span class="hint">子码流 768×572 · WebRTC 实时</span>
 
-            <el-button type="success" @click="finishDialog = true">调节帮助</el-button>
+      <!-- 板子离线状态条：仅离线时出现。唯一的手动恢复入口，必须显眼。 -->
+      <el-tag v-if="boardOffline" type="danger" effect="dark" style="margin-right:8px">板子未连接</el-tag>
+      <el-button v-if="boardOffline" type="warning" size="small" @click="reconnectBoard">重连板子</el-button>
+
+      <el-button type="success" @click="finishDialog = true">调节帮助</el-button>
     </div>
 
     <!-- ② 双路实时画面 (WebRTC) -->
@@ -25,8 +29,18 @@
           </div>
         </template>
         <div class="frame-wrap">
-          <div v-if="webrtcConnecting&&s==='front'" class="frame placeholder" style="position:absolute;z-index:1;background:rgba(0,0,0,0.85);width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none">
-            <div style="text-align:center"><p class="ph-main" style="color:#fff">WebRTC 连接中...</p><p class="ph-sub" style="color:#aaa">首次可能需要 5~10 秒</p></div></div>
+          <div v-if="s==='front' && (boardOffline || webrtcConnecting)" class="frame placeholder" style="position:absolute;inset:0;z-index:1;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;pointer-events:none">
+            <div style="text-align:center">
+              <template v-if="boardOffline">
+                <p class="ph-main" style="color:#fff">板子未连接</p>
+                <p class="ph-sub" style="color:#aaa">请点击上方「重连板子」</p>
+              </template>
+              <template v-else>
+                <p class="ph-main" style="color:#fff">WebRTC 连接中...</p>
+                <p class="ph-sub" style="color:#aaa">首次可能需要 5~10 秒</p>
+              </template>
+            </div>
+          </div>
           <video :ref="el=>setVideoRef(s,el)" autoplay playsinline muted class="frame" @click="toggleFullscreen(s)" style="cursor:pointer" :style="filterStyle" title="点击全屏" />
         </div>
       </el-card>
@@ -145,20 +159,37 @@ const pcMap = new Map()
 const videoRefs = new Map()
 const webrtcConnecting = ref(true)
 
+// —— 板子离线处理：完全停 + 手动恢复（不做任何自动重试）——
+// 为什么不自动重试：板子没接时重试永远不会成功，只会刷日志/刷弹窗。
+// 连续失败到阈值就停手，显示"板子未连接"，由用户点"重连板子"恢复。
+const OFFLINE_THRESHOLD = 3     // 轮询/建流连续失败多少次判定离线并停手
+const boardOffline = ref(false) // 真 => 页面显示离线条，所有轮询/重连已停
+let whepFails = 0               // WebRTC 建流连续失败次数（两路合计）
+
 function setVideoRef(c, el) { if (el) videoRefs.set(c, el) }
 function stopWebRTC(c) { const p=pcMap.get(c); if(p){p.close();pcMap.delete(c)} const v=videoRefs.get(c); if(v)v.srcObject=null }
 async function startWebRTC(c, u, delay) {
  if(delay>0) await new Promise(r=>setTimeout(r,delay))
  stopWebRTC(c)
  const pc=new RTCPeerConnection({iceServers:[]}); pcMap.set(c,pc); pc.addTransceiver('video',{direction:'recvonly'})
- pc.oniceconnectionstatechange=()=>{ const s=pc.iceConnectionState; if(s==='failed'||s==='disconnected'){console.warn('WebRTC '+c+' retry');stopWebRTC(c);startWebRTC(c,u,3000)} }
+ pc.oniceconnectionstatechange=()=>{ const s=pc.iceConnectionState; if(s==='failed'||s==='disconnected'){console.warn('WebRTC '+c+' lost');stopWebRTC(c);onWebrtcFail(c,u)} }
  pc.ontrack=(ev)=>{ const v=videoRefs.get(c); if(v&&ev.streams[0]){v.srcObject=ev.streams[0];if(c==='front')webrtcConnecting.value=false} }
  try{ const o=await pc.createOffer(); await pc.setLocalDescription(o)
   await new Promise(r=>{if(pc.iceGatheringState==='complete')r();else{const ck=()=>{if(pc.iceGatheringState==='complete')r();else setTimeout(ck,200)};ck()}})
   const r=await fetch('/api/v1/camera/webrtc/whep/cam_'+c,{method:'POST',headers:{'Content-Type':'application/sdp'},body:pc.localDescription.sdp})
   if(!r.ok)throw new Error('WHEP '+r.status); await pc.setRemoteDescription({type:'answer',sdp:await r.text()})
-  console.log('WebRTC '+c+' connected')
- }catch(e){console.warn('WebRTC '+c+':',e);stopWebRTC(c);startWebRTC(c,u,3000)} }
+  console.log('WebRTC '+c+' connected'); whepFails=0
+ }catch(e){console.warn('WebRTC '+c+':',e);stopWebRTC(c);onWebrtcFail(c,u)} }
+// WebRTC 建流失败：累计到阈值就停手判离线，否则有限次温和重试(3s)。
+function onWebrtcFail(c: string, u: string){
+  if(boardOffline.value) return                 // 已判离线：彻底停，等手动重连
+  whepFails++
+  if(whepFails>=OFFLINE_THRESHOLD*2){            // 两路合计，阈值放宽一倍
+    goOffline()                                  // 停所有轮询与重连
+  } else {
+    startWebRTC(c,u,3000)                         // 未到阈值前仍温和重试一次
+  }
+}
 async function initWebRTC(){ try{ const cfg=await(await fetch('/api/v1/camera/webrtc/config')).json()
  for(const cn of cfg.cams) startWebRTC(cn,cfg.boardUrl, cn==='front'?1000:2000) }catch(e){console.error('WebRTC init:',e)} }
 
@@ -266,11 +297,12 @@ function extractErr(e: unknown, fallback: string): string {
 /** 轮询板子状态。V3.0 板子直接给编码帧数与平均耗时，
  *  比 V2 靠 frames 差值估算更准，所以这里只取结果不再自己算帧率。 */
 async function poll() {
+  if (boardOffline.value) return                 // 已离线：停表，不再轮询
   try {
     const r = await cameraApi.status()
     cameras.value = r.cameras
     fps.value = Math.round(r.fps_cap ?? 0)
-
+    pollFails = 0                                 // 成功：清零离线计数
     // 该路已经能出帧了就把重连标记摘掉，让 <img> 自己接管
     if (failed.value.size) {
       const next = new Set(failed.value)
@@ -281,16 +313,42 @@ async function poll() {
       }
       failed.value = next
     }
-  } catch (e: unknown) {
-    // 板子服务没起：静默标记，页面上给出提示即可，不必每 2s 弹一次错误
+  } catch {
+    // 静默：拦截器已跳过弹窗（silent），这里只累计失败
     cameras.value = cameras.value.map((c) => ({ ...c, source_ok: false, err: '' }))
     fps.value = 0
+    if (++pollFails >= OFFLINE_THRESHOLD) { goOffline(); return }
   }
+  pollTimer = window.setTimeout(poll, 2000)       // 在线才排下一轮
 }
 
 let pollTimer: number | undefined
 let capTimer: number | undefined
 let keepAliveTimer: number | undefined
+let pollFails = 0
+
+/** 判定板子离线：停掉所有定时器与 WebRTC 重连，显示离线条。不再发任何自动请求。 */
+function goOffline() {
+  boardOffline.value = true
+  webrtcConnecting.value = false
+  if (pollTimer) { window.clearTimeout(pollTimer); pollTimer = undefined }
+  if (capTimer) { window.clearTimeout(capTimer); capTimer = undefined }
+  for (const c of ['front', 'back']) stopWebRTC(c)
+  console.warn('板子判定离线，已停止自动轮询，等待手动重连')
+}
+
+/** 唯一恢复入口：重置计数 + 清离线 + 重启轮询与 WebRTC。
+ *  被"重连板子"按钮和 onMounted 调用 —— 保证进页面必探、点按钮必恢复。 */
+function reconnectBoard() {
+  boardOffline.value = false
+  pollFails = 0
+  whepFails = 0
+  webrtcConnecting.value = true
+  initWebRTC()
+  tick.value++
+  poll()
+  pollCapture()
+}
 
 /** <img> 一旦 error 就彻底不干活了。定时换 tick 让它重连，直到板子那边恢复。 */
 function keepAlive() {
@@ -300,6 +358,7 @@ function keepAlive() {
 /** 轮询板子上的最新抓拍（只读）。
  *  没抓到图时不报错、不弹消息 —— 调机阶段"还没有抓拍"是常态，不是故障。 */
 async function pollCapture() {
+  if (boardOffline.value) return                 // 已离线：停表
   try {
     const r = await cameraApi.latestCapture()
     cap.value = r
@@ -311,25 +370,22 @@ async function pollCapture() {
       }
     }
   } catch {
-    // 板子服务没起/没抓拍图：保持安静，卡片自己显示空态
+    // 静默：空态由卡片自行显示；是否离线由 poll 统一判定
     cap.value = { ok: false, has: false }
   }
+  if (!boardOffline.value) capTimer = window.setTimeout(pollCapture, 2000)
 }
 
-onMounted(async () => {
-  initWebRTC()
-  // 首次立刻建流：tick 变化会让 <img> 开始拉
-  tick.value++
-  await poll()
-  await pollCapture()
-  pollTimer = window.setInterval(poll, 2000)
-  capTimer = window.setInterval(pollCapture, 2000)
+onMounted(() => {
+  // 进页面即走恢复入口：建流 + 探一次状态/抓拍。失败会自动走 goOffline。
+  reconnectBoard()
   keepAliveTimer = window.setInterval(keepAlive, 5000)
 })
 
 onBeforeUnmount(() => {
-  if (pollTimer) window.clearInterval(pollTimer)
-  if (capTimer) window.clearInterval(capTimer)
+  boardOffline.value = true          // 阻止在途请求回来后再排下一轮
+  if (pollTimer) window.clearTimeout(pollTimer)
+  if (capTimer) window.clearTimeout(capTimer)
   if (keepAliveTimer) window.clearInterval(keepAliveTimer)
 })
 </script>
@@ -376,6 +432,7 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 .frame-wrap {
+  position: relative;
   background: #000;
   border-radius: 4px;
   overflow: hidden;

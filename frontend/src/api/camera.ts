@@ -53,7 +53,7 @@ export function latestCaptureImageUrl(t: number): string {
 }
 
 export const cameraApi = {
-  status: () => http.get('/camera/status') as unknown as Promise<{
+  status: () => http.get('/camera/status', { silent: true } as never) as unknown as Promise<{
     ok: boolean
     port: number
     fps_cap: number
@@ -69,7 +69,7 @@ export const cameraApi = {
 
   /** 板子上的最新抓拍（只读，不入库）。板子没抓拍图时返回 has=false，不是错误。 */
   latestCapture: () =>
-    http.get('/camera/latest-capture') as unknown as Promise<LatestCapture>,
+    http.get('/camera/latest-capture', { silent: true } as never) as unknown as Promise<LatestCapture>,
 }
 
 /** 分辨率档位的中文说明。
