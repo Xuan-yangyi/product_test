@@ -117,8 +117,12 @@ class TestExecutor:
                     await self._notify("on_status_change", test_id, "running", "failed")
                     return
 
-            self._status[test_id]["status"] = "completed"
-            await self._notify("on_status_change", test_id, "running", "completed")
+            # 检查是否有失败步骤，决定最终状态
+            results = self._status[test_id].get("results", [])
+            has_failure = any(r and r.get("result") == "fail" for r in results if isinstance(r, dict))
+            self._status[test_id]["status"] = "failed" if has_failure else "completed"
+            await self._notify("on_status_change", test_id, "running",
+                               "failed" if has_failure else "completed")
 
         except Exception as e:
             logger.error(f"测试执行异常 [{test_id}]: {e}")

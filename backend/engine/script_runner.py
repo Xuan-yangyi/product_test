@@ -20,6 +20,29 @@ TEST_TYPE_TO_CFG_SUBDIR = {
     "evb_interface_test": "EVB_cfg",
     "evb_aging_test": "EVB_cfg",
 }
+# case_name (test_case_config.ini key) → section_name (script_cmd_cfg.ini [section])
+# 旧 PyQt5 代码在 _run() 中手动映射，Web 端需要此表统一转换
+CASE_TO_SECTION = {
+    "audio_check": "AUDIO",
+    "usb_check": "USB",
+    "eth_check": "ETH",
+    "4g_check": "4G",
+    "5g_check": "5G",
+    "wifi_check": "WIFI",
+    "bluetooth_check": "BLUETOOTH",
+    "emmc_check": "EMMC",
+    "drive_check": "DRIVE",
+    "phoenix_check": "PHOENIX",
+    "burn_board_sn": "SN",
+    "burn_device_sn": "SN",
+    "burn_mac": "MAC",
+    "burn_oem": "OEM",
+    "set_interface_flag": "INTERFACE_FLAG",
+    "rs232_check": "RS232",
+    "rs485_check": "RS485",
+    "io_check": "IO",
+}
+
 
 
 class ScriptRunner:
@@ -69,7 +92,7 @@ class ScriptRunner:
         cases = {}
         for section in self._config.sections():
             cases[section] = {
-                "cmd": self._config.get(section, "exec_cmd", fallback=""),
+                "cmd": self._config.get(section, "exec_cmd", fallback="").strip('"'),
                 "pass_flag": self._config.get(section, "pass_flag", fallback="PASS"),
                 "fail_flag": self._config.get(section, "fail_flag", fallback="FAIL"),
                 "timeout": self._config.getint(section, "case_timeout", fallback=30),
@@ -91,11 +114,14 @@ class ScriptRunner:
         """
         import time
 
-        case = self.get_test_cases().get(case_name)
+        section_name = CASE_TO_SECTION.get(case_name, case_name)
+        case = self.get_test_cases().get(section_name)
         if not case:
-            return {"result": "fail", "output": f"未找到测试用例: {case_name}", "duration": 0}
+            return {"result": "fail", "output": f"未找到测试用例: {case_name} (section={section_name})", "duration": 0}
 
         cmd = case["cmd"]
+        if cmd.startswith("./"):
+            cmd = f"cd /data/SE9_test_files && {cmd}"
         timeout = timeout or case["timeout"]
         pass_flag = case["pass_flag"]
         fail_flag = case["fail_flag"]
@@ -133,11 +159,14 @@ class ScriptRunner:
         """
         import time
 
-        case = self.get_test_cases().get(case_name)
+        section_name = CASE_TO_SECTION.get(case_name, case_name)
+        case = self.get_test_cases().get(section_name)
         if not case:
-            return {"result": "fail", "output": f"未找到测试用例: {case_name}", "duration": 0}
+            return {"result": "fail", "output": f"未找到测试用例: {case_name} (section={section_name})", "duration": 0}
 
         cmd = case["cmd"]
+        if cmd.startswith("./"):
+            cmd = f"cd /data/SE9_test_files && {cmd}"
         timeout = timeout or case["timeout"]
         pass_flag = case["pass_flag"]
         fail_flag = case["fail_flag"]

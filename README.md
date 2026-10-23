@@ -1,6 +1,9 @@
 # Athena2 Web Product Test
 
 > 嵌入式设备产测工具 — 从 QT 桌面应用迁移至 Web 网页方式，支持 SE9/SE12/EVB 等 CVITEK 芯片平台。
+[![Release](https://img.shields.io/badge/release-v2.0.1-blue)](https://github.com/Xuan-yangyi/product_test/releases)
+
+
 
 ## 架构
 

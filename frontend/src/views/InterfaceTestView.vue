@@ -276,9 +276,11 @@ const enabledCount = computed(() => testCases.value.filter((c: any) => c.enabled
 const caseGroupDefs: { label: string; names: string[] }[] = [
   { label: '烧录', names: ['burn_emmc', 'burn_oem', 'burn_board_sn', 'burn_device_sn', 'burn_mac', 'set_interface_flag'] },
   { label: '基础检查', names: ['chip_type_check', 'ddr_size_check', 'firmware_version_check', 'emmc_check'] },
-  { label: '外设检查', names: ['led_check', 'hdmi_check', 'phoenix_check', 'power_key_check', 'reset_key_check', 'rtc_cell_check', 'audio_check', 'usb_check'] },
+  { label: '外设自动检查', names: ['phoenix_check', 'audio_check', 'usb_check'] },
+  { label: '外设人工检查', names: ['led_check', 'hdmi_check', 'power_key_check', 'reset_key_check', 'rtc_cell_check'] },
   { label: '网络检查', names: ['eth_check', '4g_check', '5g_check', 'wifi_check', 'bluetooth_check'] },
   { label: '存储/文件', names: ['drive_check', 'upload_test_files', 'remove_test_files'] },
+  { label: '串口/IO', names: ['rs232_check', 'rs485_check', 'io_check'] },
 ]
 
 const caseGroups = computed(() => {
@@ -358,6 +360,9 @@ const caseLabelMap: Record<string, string> = {
   burn_mac: '烧录MAC',
   set_interface_flag: '设置接口标志',
   remove_test_files: '清理测试文件',
+  rs232_check: 'RS232检查',
+  rs485_check: 'RS485检查',
+  io_check: 'IO检查',
 }
 
 async function fetchTestCases() {
@@ -389,10 +394,12 @@ async function onProfileSelect(name: string) {
       ElMessage.info('该配置暂无测试选项')
       return
     }
-    // 将 profile 的测试选项应用到 UI checkbox
+    // 将 profile 的测试选项应用到 UI checkbox，并持久化到后端
     for (const c of testCases.value) {
-      if (opts.hasOwnProperty(c.name)) {
-        c.enabled = !!opts[c.name]
+      const enabled = opts.hasOwnProperty(c.name) ? !!opts[c.name] : false
+      if (c.enabled !== enabled) {
+        c.enabled = enabled
+        await http.put(`/test-types/se9_interface_test/cases/${c.name}`, { enabled })
       }
     }
     ElMessage.success(`已应用「${name}」的测试选项`)

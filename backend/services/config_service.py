@@ -707,6 +707,283 @@ class ConfigService:
                     timeout=86400 * 3,  # 最长 3 天
                     required=True,
                 )
+            elif name in ("led_check", "hdmi_check", "power_key_check", "reset_key_check", "rtc_cell_check"):
+                # 交互式检查：旧版弹窗询问操作员，Web 端通过 on_interaction_required 回调实现
+                def make_interactive_execute(case_name, _case=case):
+                    def execute(context):
+                        import os as _os_int
+                        from ..config import Config as _Config_int
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+                        on_interact = context.get("_on_interaction_callback")
+                        _syslog_path = str(_Config_int.LOG_DIR / f"syslog_{test_id}.log")
+
+                        def _push_log(msg):
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os_int.makedirs(_os_int.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    _lf.write(f"[{ts}] {msg}\n")
+                            except Exception:
+                                pass
+
+                        label = _case.get("label", case_name)
+                        _push_log(f"交互检查: {label} — 请在设备端确认")
+                        if on_interact:
+                            try:
+                                result = on_interact(test_id, case_name,
+                                    f"请检查设备: {label} 是否正常？",
+                                    dialog_type="confirm", timeout=300)
+                                if result and result.get("action") == "confirm":
+                                    _push_log(f"交互检查通过: {label} (操作员确认)")
+                                    return True
+                                else:
+                                    _push_log(f"交互检查失败: {label} (操作员取消)")
+                                    return False
+                            except Exception as e:
+                                _push_log(f"交互检查异常: {label} — {e}")
+                                return False
+                        # 无交互回调时默认通过（兼容）
+                        _push_log(f"交互检查: {label} — 无交互回调，默认通过")
+                        return True
+                    return execute
+
+                step = TestStep(
+                    name=name,
+                    label=case["label"],
+                    execute=make_interactive_execute(name),
+                    timeout=300,
+                    required=False,
+                )
+            elif name == "upload_test_files":
+                # SCP 上传测试文件到 DUT + md5sum 校验
+                def make_upload_execute(case_name):
+                    def execute(context):
+                        import os as _os_up
+                        import hashlib as _hashlib
+                        from ..config import Config as _Config_up
+                        ssh = context.get("ssh_client")
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+                        _syslog_path = str(_Config_up.LOG_DIR / f"syslog_{test_id}.log")
+
+                        def _push_log(msg):
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os_up.makedirs(_os_up.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    _lf.write(f"[{ts}] {msg}\n")
+                            except Exception:
+                                pass
+
+                        if not ssh:
+                            _push_log("上传测试文件失败: 无 SSH 连接")
+                            return False
+
+                        local_dir = _Config_up.DATA_DIR / "SE9_test_files"
+                        if not local_dir.exists():
+                            _push_log(f"上传测试文件失败: 本地目录不存在 {local_dir}")
+                            return False
+
+                        _push_log("开始上传测试文件到设备...")
+                        try:
+                            # 创建远程目录
+                            ssh.exec_cmd("mkdir -p /data/SE9_test_files", timeout=10,
+                                        sudo=True, sudo_password="linaro")
+                            ssh.exec_cmd("chown linaro:linaro /data/SE9_test_files", timeout=10,
+                                        sudo=True, sudo_password="linaro")
+
+                            # 逐个上传文件
+                            import os as _os_up2
+                            all_ok = True
+                            for fname in _os_up2.listdir(str(local_dir)):
+                                local_path = local_dir / fname
+                                if not local_path.is_file():
+                                    continue
+                                if fname.endswith(".md5"):
+                                    continue
+                                _push_log(f"  上传: {fname}")
+                                remote_path = f"/data/SE9_test_files/{fname}"
+                                ok = ssh.upload_file(str(local_path), remote_path)
+                                if not ok:
+                                    _push_log(f"  上传失败: {fname}")
+                                    all_ok = False
+
+                            if all_ok:
+                                ssh.exec_cmd("chmod +x /data/SE9_test_files/*.sh", timeout=10,
+                                            sudo=True, sudo_password="linaro")
+                                _push_log("测试文件上传完成，开始 md5sum 校验...")
+                                # 从本地 md5 文件读取期望值
+                                md5_file = local_dir / "SE9_test_files.md5"
+                                if md5_file.exists():
+                                    with open(str(md5_file), "r") as _mf:
+                                        expected = {}
+                                        for line in _mf:
+                                            line = line.strip()
+                                            if not line:
+                                                continue
+                                            parts = line.split()
+                                            if len(parts) >= 2:
+                                                expected[parts[1].lstrip("./")] = parts[0]
+
+                                    stdout, _, _ = ssh.exec_cmd(
+                                        "cd /data/SE9_test_files && md5sum * 2>/dev/null", timeout=30,
+                                        sudo=True, sudo_password="linaro"
+                                    )
+                                    for line in stdout.split("\n"):
+                                        line = line.strip()
+                                        if not line:
+                                            continue
+                                        parts = line.split()
+                                        if len(parts) >= 2:
+                                            fname = parts[1]
+                                            actual_md5 = parts[0]
+                                            exp = expected.get(fname, "")
+                                            if exp and actual_md5 != exp:
+                                                _push_log(f"  MD5 不匹配: {fname} (期望={exp[:8]}..., 实际={actual_md5[:8]}...)")
+                                                all_ok = False
+
+                            if all_ok:
+                                _push_log("测试文件上传完成且校验通过")
+                            else:
+                                _push_log("测试文件上传或校验存在问题")
+                            return all_ok
+                        except Exception as e:
+                            _push_log(f"上传测试文件异常: {e}")
+                            return False
+                    return execute
+
+                step = TestStep(
+                    name=name,
+                    label=case["label"],
+                    execute=make_upload_execute(name),
+                    timeout=300,
+                    required=True,
+                )
+            elif name == "remove_test_files":
+                # 清理 DUT 上的测试文件
+                def make_remove_execute(case_name):
+                    def execute(context):
+                        import os as _os_rm
+                        from ..config import Config as _Config_rm
+                        ssh = context.get("ssh_client")
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+                        _syslog_path = str(_Config_rm.LOG_DIR / f"syslog_{test_id}.log")
+
+                        def _push_log(msg):
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os_rm.makedirs(_os_rm.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    _lf.write(f"[{ts}] {msg}\n")
+                            except Exception:
+                                pass
+
+                        if not ssh:
+                            _push_log("清理测试文件失败: 无 SSH 连接")
+                            return False
+
+                        _push_log("清理设备上的测试文件...")
+                        try:
+                            ssh.exec_cmd("rm -rf /data/SE9_test_files", timeout=10,
+                                        sudo=True, sudo_password="linaro")
+                            _push_log("测试文件清理完成")
+                            return True
+                        except Exception as e:
+                            _push_log(f"清理测试文件异常: {e}")
+                            return False
+                    return execute
+
+                step = TestStep(
+                    name=name,
+                    label=case["label"],
+                    execute=make_remove_execute(name),
+                    timeout=30,
+                    required=False,
+                )
+            elif name == "ddr_size_check":
+                def make_ddr_check_execute(case_name):
+                    def execute(context):
+                        import re as _re_ddr
+                        ssh = context.get("ssh_client")
+                        test_id = context.get("test_id", "")
+                        on_log = context.get("_on_log_callback")
+                        import os as _os_ddr
+                        from ..config import Config as _Config_ddr
+                        _syslog_path = str(_Config_ddr.LOG_DIR / f"syslog_{test_id}.log")
+                        def _push_log(msg):
+                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            if on_log:
+                                on_log(test_id, "INFO", "syslog", msg)
+                            try:
+                                _os_ddr.makedirs(_os_ddr.path.dirname(_syslog_path), exist_ok=True)
+                                with open(_syslog_path, "a") as _lf:
+                                    line = f"[{ts}] {msg}"
+                                    _lf.write(line + "\n")
+                            except Exception:
+                                pass
+                        if not ssh:
+                            _push_log("DDR检查失败: 无 SSH 连接")
+                            return False
+                        _push_log("DDR检查: 读取 show_ddr...")
+                        try:
+                            stdout, stderr, code = ssh.exec_cmd(
+                                "show_ddr 2>/dev/null", timeout=10,
+                                sudo=True, sudo_password="linaro"
+                            )
+                        except Exception as e:
+                            _push_log(f"DDR检查失败: show_ddr 执行异常: {e}")
+                            return False
+                        output = stdout + "\n" + stderr
+                        m = _re_ddr.search(r"SIZE\s*:\s*(\d+)\s*(MB|GB)", output, _re_ddr.IGNORECASE)
+                        if not m:
+                            _push_log(f"DDR检查失败: show_ddr 输出中未找到 SIZE 字段, output={output[:200]}")
+                            return False
+                        actual_gb = int(m.group(1))
+                        if m.group(2).upper() == "MB":
+                            actual_gb = actual_gb // 1024
+                        _push_log(f"DDR检查: 实际 DDR = {actual_gb}GB")
+                        try:
+                            stdout2, _, _ = ssh.exec_cmd(
+                                "cat /factory/OEMconfig.ini 2>/dev/null", timeout=10,
+                                sudo=True, sudo_password="linaro"
+                            )
+                        except Exception as e:
+                            _push_log(f"DDR检查失败: 读取 OEMconfig.ini 异常: {e}")
+                            return False
+                        m2 = _re_ddr.search(r"DTS_TYPE\s*=\s*(\S+)", stdout2)
+                        if not m2:
+                            _push_log("DDR检查失败: OEMconfig.ini 中未找到 DTS_TYPE")
+                            return False
+                        dts_type = m2.group(1).strip()
+                        _push_log(f"DDR检查: DTS_TYPE = {dts_type}")
+                        m3 = _re_ddr.search(r"_(\d+)G", dts_type, _re_ddr.IGNORECASE)
+                        if not m3:
+                            _push_log(f"DDR检查失败: DTS_TYPE 中未解析到容量 (_XG), dts_type={dts_type}")
+                            return False
+                        expected_gb = int(m3.group(1))
+                        _push_log(f"DDR检查: 期望 DDR = {expected_gb}GB")
+                        if actual_gb == expected_gb:
+                            _push_log(f"DDR检查通过: 实际 {actual_gb}GB == 期望 {expected_gb}GB")
+                            return True
+                        else:
+                            _push_log(f"DDR检查失败: 实际 {actual_gb}GB != 期望 {expected_gb}GB (DTS_TYPE={dts_type})")
+                            return False
+                    return execute
+                step = TestStep(
+                    name=name,
+                    label=case["label"],
+                    execute=make_ddr_check_execute(name),
+                    timeout=30,
+                    required=True,
+                )
             else:
                 def make_execute(case_name, sr, _case=case):
                     def execute(context):
@@ -745,7 +1022,17 @@ class ConfigService:
                         if ok:
                             _push_log(f"完成: {label} — 通过 (耗时 {result.get('duration', 0):.1f}s)")
                         else:
-                            _push_log(f"失败: {label} — {result.get('output', '')[:200]}")
+                            output = result.get("output", "")
+                            # 提取关键错误信息：优先 QA_FAIL 行，其次最后几行非空输出
+                            lines = [l.strip() for l in output.split("\n") if l.strip()]
+                            fail_lines = [l for l in lines if "QA_FAIL" in l or "fail" in l.lower() or "error" in l.lower() or "not found" in l.lower() or "No such" in l.lower()]
+                            if fail_lines:
+                                detail = "; ".join(fail_lines[-3:])
+                            elif lines:
+                                detail = "; ".join(lines[-3:])
+                            else:
+                                detail = "(无输出，可能是硬件未连接或脚本立即退出)"
+                            _push_log(f"失败: {label} — {detail}")
                         return ok
                     return execute
 
@@ -754,7 +1041,7 @@ class ConfigService:
                     label=case["label"],
                     execute=make_execute(name, script_runner),
                     timeout=30,
-                    required=True,
+                    required=False,
                 )
             steps.append(step)
 
