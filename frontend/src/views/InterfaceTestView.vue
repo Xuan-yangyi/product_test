@@ -2,6 +2,26 @@
   <div class="cluster-view">
     <h2 class="page-title">接口测试</h2>
 
+    <!-- 测试类型选择 -->
+    <el-card shadow="never" class="section-card">
+      <el-form :inline="true">
+        <el-form-item label="测试类型">
+          <el-select v-model="currentTestType" @change="onTestTypeChange" style="width: 260px">
+            <el-option
+              v-for="t in testTypeOptions"
+              :key="t.type"
+              :label="t.label"
+              :value="t.type"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="产品型号">
+          <el-input v-model="currentProductModel" placeholder="SE9 / EVB" style="width: 200px" />
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+
     <!-- IP 段扫描 -->
     <el-card shadow="never" class="section-card">
       <template #header>IP 段扫描</template>
@@ -253,6 +273,14 @@ const deviceTableRef = ref()
 
 const clusterParams = reactive({ writeOem: false })
 
+// 测试类型选择
+const currentTestType = ref("se9_interface_test")
+const currentProductModel = ref("SE9")
+const testTypeOptions = ref([
+  { type: "se9_interface_test", label: "SE9 接口测试" },
+  { type: "evb_interface_test", label: "BM1688 EVB 接口测试" },
+])
+
 // 多集群支持
 interface ActiveCluster {
   clusterId: string
@@ -367,7 +395,7 @@ const caseLabelMap: Record<string, string> = {
 
 async function fetchTestCases() {
   try {
-    const res: any = await http.get('/test-types/se9_interface_test/cases')
+    const res: any = await http.get(`/test-types/${currentTestType.value}/cases`)
     const cases = res.cases || []
     testCases.value = cases.map((c: any) => ({
       ...c,
@@ -385,6 +413,12 @@ async function loadProfiles() {
   } catch (e) {}
 }
 
+async function onTestTypeChange() {
+  testCases.value = []
+  await fetchTestCases()
+  await loadProfiles()
+}
+
 async function onProfileSelect(name: string) {
   if (!name) return
   try {
@@ -399,7 +433,7 @@ async function onProfileSelect(name: string) {
       const enabled = opts.hasOwnProperty(c.name) ? !!opts[c.name] : false
       if (c.enabled !== enabled) {
         c.enabled = enabled
-        await http.put(`/test-types/se9_interface_test/cases/${c.name}`, { enabled })
+        await http.put(`/test-types/${currentTestType.value}/cases/${c.name}`, { enabled })
       }
     }
     ElMessage.success(`已应用「${name}」的测试选项`)
@@ -410,7 +444,7 @@ async function onProfileSelect(name: string) {
 
 async function onCaseToggle(c: any, enabled: boolean) {
   try {
-    await http.put(`/test-types/se9_interface_test/cases/${c.name}`, { enabled })
+    await http.put(`/test-types/${currentTestType.value}/cases/${c.name}`, { enabled })
     c.enabled = enabled
   } catch (e) {
     // API 失败则不更新 UI
@@ -519,8 +553,8 @@ async function startCluster() {
       params: {},
     }))
     const res: any = await http.post('/tests/cluster', {
-      test_type: 'se9_interface_test',
-      product_model: 'SE9',
+      test_type: currentTestType.value,
+      product_model: currentProductModel.value,
       devices,
       write_oem: clusterParams.writeOem,
       oem_profile: selectedProfileName.value || null,

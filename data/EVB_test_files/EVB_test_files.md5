@@ -1,0 +1,13 @@
+6536654158a55a2ea7f2933f8a56ec62  ./check_emmc.sh
+c259abc3c3d920e47278cf0b9ee96afd  ./test_uart.sh
+8dc469aa7e7a300f5ce49d3d73f923b7  ./test_sdcard.sh
+a91febdd5a5a614ea09b2bdfa1a31ec3  ./data.bin
+f219624403dd7ca8dcad9f093649f20c  ./burn_sn.sh
+429b7c62340f007b90204ed6c2fa6a48  ./test_eth.sh
+ad2e08c6ae93d7817aebe1427161de5e  ./test_can.sh
+24b1ae364b9b74883b56c4fc4444dea3  ./test_sata_drive.sh
+daaef14749fc67ab2c8fd89f4e690cf5  ./test_usb.sh
+ee6741b1a8df5c676b6c919aee72a22c  ./set_interface_flag.sh
+22dec7d760d342accbc869187615001a  ./burn_mac.sh
+f5c3da22e8aa3a12ac87a954c2a44544  ./test_nvme_drive.sh
+48d0993d870ece3c03031e591d87ff67  ./burn_oem.sh

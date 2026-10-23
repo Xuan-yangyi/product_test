@@ -1,0 +1,12 @@
+[Unit]
+Description=Echo Service for Hardware Testing
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/echo_service.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

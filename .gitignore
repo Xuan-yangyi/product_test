@@ -22,9 +22,17 @@ env/
 .DS_Store
 Thumbs.db
 
-# Project data (generated at runtime)
-data/
-log/
+# Project data — 排除运行时数据，保留测试脚本/OEM/aging配置
+data/*
+!data/SE9_test_files/
+!data/EVB_test_files/
+!data/OEM_config_files/
+!data/AGING_test_files/
+
+# 排除大体积二进制（>10MB，不适合 git）
+data/SE9_test_files/data.bin
+data/EVB_test_files/data.bin
+data/AGING_test_files/soc_aging/*.tgz
 
 # Sensitive configuration
 cfg/ai_config.json
