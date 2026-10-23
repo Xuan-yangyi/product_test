@@ -1,0 +1,31 @@
+{
+  "name": "BM1688 EVB 通用接口测试",
+  "test_type": "evb_interface_test",
+  "product_model": "EVB",
+  "test_options": {
+    "mcu_uart_check": true,
+    "burn_emmc": true,
+    "chip_type_check": true,
+    "firmware_version_check": true,
+    "upload_test_files": true,
+    "burn_oem": true,
+    "led_check": true,
+    "hdmi_check": true,
+    "power_key_check": true,
+    "reset_key_check": true,
+    "rtc_cell_check": true,
+    "pcie_check": true,
+    "sata_check": true,
+    "usb_check": true,
+    "sdcard_check": true,
+    "uart_check": true,
+    "eth_check": true,
+    "emmc_check": true,
+    "burn_sn": true,
+    "burn_mac": true,
+    "set_interface_flag": true,
+    "remove_test_files": true
+  },
+  "created_at": "2026-10-23T12:00:00",
+  "updated_at": "2026-10-23T12:00:00"
+}

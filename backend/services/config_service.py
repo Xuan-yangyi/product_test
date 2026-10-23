@@ -1440,7 +1440,7 @@ class ConfigService:
         return entry
 
     def get_profile(self, name: str) -> dict:
-        """获取 profile 详情（含 OEM 文件内容）"""
+        """获取 profile 详情（含 OEM 文件内容 + test_options）"""
         import os as _os
 
         profiles = self._load_profiles_index()
@@ -1451,7 +1451,17 @@ class ConfigService:
                 if oem_path.exists():
                     with open(oem_path, "r", encoding="utf-8") as f:
                         oem_content = f.read()
-                return {**p, "oem_content": oem_content}
+                result = {**p, "oem_content": oem_content}
+                # 读取 profile.json 获取 test_type 和 test_options
+                profile_json = self.profiles_dir / name / "profile.json"
+                if profile_json.exists():
+                    import json as _json
+                    with open(profile_json, "r", encoding="utf-8") as _pf:
+                        pdata = _json.load(_pf)
+                    result["test_type"] = pdata.get("test_type", "")
+                    result["product_model"] = pdata.get("product_model", "")
+                    result["test_options"] = pdata.get("test_options", {})
+                return result
         raise ValueError(f"Profile '{name}' 不存在")
 
     def update_profile_oem(self, name: str, oem_content: str) -> dict:

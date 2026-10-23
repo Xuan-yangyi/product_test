@@ -30,6 +30,10 @@ data/*
 !data/AGING_test_files/
 
 # 排除大体积二进制（>10MB，不适合 git）
+cfg/profiles/*/OEMconfig.ini
+!cfg/profiles/*/profile.json
+!cfg/profiles/index.json
+
 data/SE9_test_files/data.bin
 data/EVB_test_files/data.bin
 data/AGING_test_files/soc_aging/*.tgz

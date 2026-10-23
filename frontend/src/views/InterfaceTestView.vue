@@ -2,25 +2,6 @@
   <div class="cluster-view">
     <h2 class="page-title">接口测试</h2>
 
-    <!-- 测试类型选择 -->
-    <el-card shadow="never" class="section-card">
-      <el-form :inline="true">
-        <el-form-item label="测试类型">
-          <el-select v-model="currentTestType" @change="onTestTypeChange" style="width: 260px">
-            <el-option
-              v-for="t in testTypeOptions"
-              :key="t.type"
-              :label="t.label"
-              :value="t.type"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="产品型号">
-          <el-input v-model="currentProductModel" placeholder="SE9 / EVB" style="width: 200px" />
-        </el-form-item>
-      </el-form>
-    </el-card>
-
 
     <!-- IP 段扫描 -->
     <el-card shadow="never" class="section-card">
@@ -273,13 +254,6 @@ const deviceTableRef = ref()
 
 const clusterParams = reactive({ writeOem: false })
 
-// 测试类型选择
-const currentTestType = ref("se9_interface_test")
-const currentProductModel = ref("SE9")
-const testTypeOptions = ref([
-  { type: "se9_interface_test", label: "SE9 接口测试" },
-  { type: "evb_interface_test", label: "BM1688 EVB 接口测试" },
-])
 
 // 多集群支持
 interface ActiveCluster {
@@ -295,6 +269,10 @@ const activeClusters = ref<ActiveCluster[]>([])
 // Profile 选择
 const profiles = ref<any[]>([])
 const selectedProfileName = ref('')
+
+// 测试类型（隐藏，由 profile 选择驱动）
+const currentTestType = ref("se9_interface_test")
+const currentProductModel = ref("SE9")
 
 // 测试项目
 const testCases = ref<any[]>([])
@@ -411,12 +389,6 @@ async function loadProfiles() {
     const res: any = await configApi.listProfiles()
     profiles.value = res.profiles || []
   } catch (e) {}
-}
-
-async function onTestTypeChange() {
-  testCases.value = []
-  await fetchTestCases()
-  await loadProfiles()
 }
 
 async function onProfileSelect(name: string) {
