@@ -26,6 +26,7 @@ Thumbs.db
 data/*
 !data/SE9_test_files/
 !data/EVB_test_files/
+!data/SE13_test_files/
 !data/OEM_config_files/
 !data/AGING_test_files/
 
@@ -54,3 +55,10 @@ frontend/dist/
 *.log
 *.pre_*
 cfg/webserver.env
+
+# SE13 老化包（约 2.4GB，不入库，本地放置）
+data/AGING_test_files/se13_aging/*.tgz
+
+# AI 配置备份（含密钥，禁止入库）
+cfg/ai_config.json.bak
+cfg/ai_config.json.*.bak

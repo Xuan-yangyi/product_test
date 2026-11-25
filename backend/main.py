@@ -10,6 +10,8 @@ from .api.captures import router as captures_router
 from .api.cluster_api import router as cluster_router
 from .api.ai_api import router as ai_router
 from .api.camera import router as camera_router
+import socket as _socket
+import logging as _logging
 
 app = FastAPI(title="Athena2 Product Test", version="2.0.0")
 
@@ -33,6 +35,18 @@ app.include_router(config_router)
 app.include_router(results_router)
 app.include_router(captures_router)
 app.include_router(camera_router)
+
+@app.on_event("startup")
+async def startup_event():
+    """启动时显示服务器实际 IP 地址"""
+    try:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        s.connect(("10.80.40.1", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        _logging.getLogger("uvicorn").info(f"Server accessible at http://{local_ip}")
+    except Exception:
+        pass
 
 @app.get("/api/health")
 async def health_check():

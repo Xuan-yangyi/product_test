@@ -64,12 +64,25 @@
     <el-card shadow="never" class="section-card" v-if="selectedDevices.length">
       <template #header>老化参数 (已选 {{ selectedDevices.length }} 台设备)</template>
       <el-form :inline="true">
-        <el-form-item label="循环次数">
-          <el-input-number v-model="clusterParams.loop" :min="0" :max="9999" />
-        </el-form-item>
-        <el-form-item label="重启次数">
-          <el-input-number v-model="clusterParams.reboot" :min="0" :max="999" />
-        </el-form-item>
+        <!-- SE13: 按老化时间 -->
+        <template v-if="isSE13">
+          <el-form-item label="老化时间">
+            <el-input-number v-model="clusterParams.agingValue" :min="1" :max="99999" />
+            <el-select v-model="clusterParams.agingUnit" style="width: 90px; margin-left: 8px">
+              <el-option label="分钟" value="min" />
+              <el-option label="小时" value="hour" />
+            </el-select>
+          </el-form-item>
+        </template>
+        <!-- Athena2(SE9/EVB): 按循环/重启次数 -->
+        <template v-else>
+          <el-form-item label="循环次数">
+            <el-input-number v-model="clusterParams.loop" :min="0" :max="9999" />
+          </el-form-item>
+          <el-form-item label="重启次数">
+            <el-input-number v-model="clusterParams.reboot" :min="0" :max="999" />
+          </el-form-item>
+        </template>
         <el-form-item label="写入OEM">
           <el-switch v-model="clusterParams.writeOem" />
         </el-form-item>
@@ -204,6 +217,7 @@ import TempChart from '@/components/TempChart.vue'
 import LoopTimingChart from '@/components/LoopTimingChart.vue'
 import AiChat from '@/components/AiChat.vue'
 import http from '@/api/http'
+import { useProductLine } from '@/stores/productLine'
 
 const scanForm = reactive({ startIp: '10.80.40.1', endIp: '10.80.40.254' })
 const scanning = ref(false)
@@ -214,7 +228,11 @@ const discoveredDevices = ref<any[]>([])
 const selectedDevices = ref<any[]>([])
 const deviceTableRef = ref()
 
-const clusterParams = reactive({ loop: 1, reboot: 0, writeOem: false })
+const clusterParams = reactive({ loop: 1, reboot: 0, writeOem: false, agingValue: 24, agingUnit: 'hour' })
+
+// 产品线：X2(SE13) 按老化时间，Athena2(SE9/EVB) 按循环/重启次数
+const { current: currentLine, config: plConfig } = useProductLine()
+const isSE13 = computed(() => currentLine.value === 'X2')
 
 // 多集群支持
 interface ActiveCluster {
@@ -349,7 +367,7 @@ async function scanIPs() {
       }
 
       try {
-        const res: any = await http.post('/devices/network/scan', { ips })
+        const res: any = await http.post('/devices/network/scan', { ips }, { timeout: 120000 })
         const found = res.devices || []
         discoveredDevices.value.push(...found)
         ElMessage.success(`已扫描 ${Math.min(batchEnd - startNum + 1, total)}/${total}，发现 ${discoveredDevices.value.length} 台设备`)
@@ -386,13 +404,21 @@ async function startCluster() {
   }
   starting.value = true
   try {
+    const agingTestType = plConfig.value.agingTestType
+    const productModel = isSE13.value ? 'SE13' : 'SE9'
+    const agingSeconds = clusterParams.agingUnit === 'hour'
+      ? clusterParams.agingValue * 3600
+      : clusterParams.agingValue * 60
+
     const devices = selectedDevices.value.map((d: any) => ({
       ip: d.ip,
-      params: { loop: clusterParams.loop, reboot: clusterParams.reboot, chip_model: d.chip_model || 'bm1688' },
+      params: isSE13.value
+        ? { aging_time: agingSeconds, chip_model: d.chip_model || 'cv84x6' }
+        : { loop: clusterParams.loop, reboot: clusterParams.reboot, chip_model: d.chip_model || 'bm1688' },
     }))
     const res: any = await http.post('/tests/cluster', {
-      test_type: 'se9_aging_test',
-      product_model: 'SE9',
+      test_type: agingTestType,
+      product_model: productModel,
       devices,
       write_oem: clusterParams.writeOem,
     })
@@ -404,7 +430,7 @@ async function startCluster() {
     const detail: any = await http.get(`/tests/cluster/${res.cluster_id}`)
     activeClusters.value.push({
       clusterId: res.cluster_id,
-      testType: 'se9_aging_test',
+      testType: agingTestType,
       status: 'running',
       nodes: detail.nodes || [],
       summary: detail.summary || { total: 0, completed: 0, failed: 0, running: 0 },

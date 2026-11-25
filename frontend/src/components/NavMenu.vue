@@ -8,7 +8,25 @@
     :router="true"
     :collapse="false"
   >
-    <div class="logo">Athena2 产测</div>
+    <div class="logo">
+      <el-dropdown trigger="click" @command="handleProductLineSwitch">
+        <span class="logo-dropdown-trigger">
+          {{ currentLineLabel }} <el-icon><ArrowDown /></el-icon>
+        </span>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item
+              v-for="line in productLines"
+              :key="line.key"
+              :command="line.key"
+              :class="{ 'is-active': line.key === currentLine }"
+            >
+              {{ line.label }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+    </div>
     <el-menu-item index="/cluster-aging">
       <el-icon><Connection /></el-icon>
       <span>老化测试</span>
@@ -39,7 +57,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Document, Setting, Connection, Cpu, Picture, VideoCamera } from '@element-plus/icons-vue'
+import { Document, Setting, Connection, Cpu, Picture, VideoCamera, ArrowDown } from '@element-plus/icons-vue'
+import { useProductLine } from '@/stores/productLine'
 
 const route = useRoute()
 const activeRoute = computed(() => {
@@ -47,6 +66,20 @@ const activeRoute = computed(() => {
   if (path.startsWith('/test-config') || path.startsWith('/test-run')) return '/cluster-aging'
   return path
 })
+
+const { current, config, switchTo } = useProductLine()
+
+const currentLine = computed(() => current.value)
+const currentLineLabel = computed(() => config.value.label)
+
+const productLines = [
+  { key: 'Athena2' as const, label: 'Athena2 产测' },
+  { key: 'X2' as const, label: 'SE13 产测' },
+]
+
+function handleProductLineSwitch(line: string) {
+  switchTo(line as 'Athena2' | 'X2')
+}
 </script>
 
 <style scoped>
@@ -57,11 +90,27 @@ const activeRoute = computed(() => {
 }
 .logo {
   height: 56px;
-  line-height: 56px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--border-color);
+}
+.logo-dropdown-trigger {
   font-size: 18px;
   font-weight: bold;
   color: var(--accent);
-  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  user-select: none;
+}
+.logo-dropdown-trigger:hover {
+  opacity: 0.8;
+}
+.is-active {
+  color: var(--accent);
+  font-weight: bold;
 }
 </style>

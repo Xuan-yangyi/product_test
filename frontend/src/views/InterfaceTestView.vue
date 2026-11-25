@@ -242,6 +242,9 @@ import { Search, Refresh, Delete } from '@element-plus/icons-vue'
 import LogViewer from '@/components/LogViewer.vue'
 import http from '@/api/http'
 import { configApi } from '@/api/config'
+import { useProductLine } from '@/stores/productLine'
+
+const { current: currentLine, defaultTestType } = useProductLine()
 
 const scanForm = reactive({ startIp: '10.80.40.1', endIp: '10.80.40.254' })
 const scanning = ref(false)
@@ -271,8 +274,9 @@ const profiles = ref<any[]>([])
 const selectedProfileName = ref('')
 
 // 测试类型（隐藏，由 profile 选择驱动）
-const currentTestType = ref("se9_interface_test")
-const currentProductModel = ref("SE9")
+const currentTestType = ref(defaultTestType.value || "se9_interface_test")
+// 从当前产品线推导产品型号（页面在 X2 下打开时 watch 不会触发，必须初始化正确）
+const currentProductModel = ref(currentLine.value === "X2" ? "SE13" : "SE9")
 
 // 测试项目
 const testCases = ref<any[]>([])
@@ -280,13 +284,13 @@ const enabledCount = computed(() => testCases.value.filter((c: any) => c.enabled
 
 // 测试用例分组定义
 const caseGroupDefs: { label: string; names: string[] }[] = [
-  { label: '烧录', names: ['burn_emmc', 'burn_oem', 'burn_board_sn', 'burn_device_sn', 'burn_mac', 'set_interface_flag'] },
+  { label: '烧录', names: ['burn_emmc', 'burn_oem', 'burn_board_sn', 'burn_device_sn', 'burn_sn', 'burn_mac', 'set_interface_flag'] },
   { label: '基础检查', names: ['chip_type_check', 'ddr_size_check', 'firmware_version_check', 'emmc_check'] },
   { label: '外设自动检查', names: ['phoenix_check', 'audio_check', 'usb_check'] },
   { label: '外设人工检查', names: ['led_check', 'hdmi_check', 'power_key_check', 'reset_key_check', 'rtc_cell_check'] },
   { label: '网络检查', names: ['eth_check', '4g_check', '5g_check', 'wifi_check', 'bluetooth_check'] },
   { label: '存储/文件', names: ['drive_check', 'upload_test_files', 'remove_test_files'] },
-  { label: '串口/IO', names: ['rs232_check', 'rs485_check', 'io_check'] },
+  { label: '凤凰端子IO测试', names: ['rs232_check', 'rs485_check', 'io_check', 'can_check'] },
 ]
 
 const caseGroups = computed(() => {
@@ -308,6 +312,19 @@ let detailRefreshTimer: any = null
 
 onMounted(async () => {
   await loadExistingClusters()
+})
+
+// 产品线切换时更新默认 test_type 并重新加载
+watch(currentLine, (line) => {
+  const newType = line === 'X2' ? 'se13_interface_test' : 'se9_interface_test'
+  const newModel = line === 'X2' ? 'SE13' : 'SE9'
+  currentProductModel.value = newModel   // 始终同步产品型号
+  if (currentTestType.value !== newType) {
+    currentTestType.value = newType
+    testCases.value = []
+    selectedProfileName.value = ''
+    fetchTestCases()
+  }
 })
 
 onUnmounted(() => {
@@ -363,12 +380,15 @@ const caseLabelMap: Record<string, string> = {
   emmc_check: 'eMMC检查',
   burn_board_sn: '烧录主板SN',
   burn_device_sn: '烧录设备SN',
+  burn_sn: '烧录SN',
   burn_mac: '烧录MAC',
   set_interface_flag: '设置接口标志',
   remove_test_files: '清理测试文件',
   rs232_check: 'RS232检查',
   rs485_check: 'RS485检查',
   io_check: 'IO检查',
+  can_check: 'CAN检测',
+  ssd_check: 'SSD检测',
 }
 
 async function fetchTestCases() {
@@ -396,6 +416,19 @@ async function onProfileSelect(name: string) {
   try {
     const res: any = await configApi.getProfile(name)
     const opts = res.test_options || {}
+
+    // 从 profile 中读取 test_type 和 product_model，切换测试类型
+    const profileTestType = res.test_type || currentTestType.value
+    const profileProductModel = res.product_model || currentProductModel.value
+    const typeChanged = profileTestType !== currentTestType.value
+    if (typeChanged) {
+      currentTestType.value = profileTestType
+      currentProductModel.value = profileProductModel
+      selectedProfileName.value = name  // 先设值，避免 fetchTestCases 里清空
+      await fetchTestCases()  // 重新加载新 test_type 的用例列表
+      // fetchTestCases 之后 testCases 已更新，重新应用 profile 选项
+    }
+
     if (Object.keys(opts).length === 0) {
       ElMessage.info('该配置暂无测试选项')
       return
@@ -408,7 +441,7 @@ async function onProfileSelect(name: string) {
         await http.put(`/test-types/${currentTestType.value}/cases/${c.name}`, { enabled })
       }
     }
-    ElMessage.success(`已应用「${name}」的测试选项`)
+    ElMessage.success(`已应用「${name}」(${currentTestType.value})`)
   } catch (e) {
     ElMessage.error('加载配置测试选项失败')
   }
@@ -436,7 +469,7 @@ async function loadExistingClusters() {
     const res = await http.get('/tests/cluster')
     const clusters = (res as any).clusters || []
     const ifaceClusters = clusters.filter((c: any) =>
-      c.test_type === 'se9_interface_test' && (c.status === 'running' || c.status === 'interrupted' || c.status === 'completed' || c.status === 'failed')
+      (c.test_type === currentTestType.value || c.test_type === 'se9_interface_test' || c.test_type === 'evb_interface_test' || c.test_type === 'se13_interface_test') && (c.status === 'running' || c.status === 'interrupted' || c.status === 'completed' || c.status === 'failed')
     )
     for (const c of ifaceClusters) {
       const detail: any = await http.get(`/tests/cluster/${c.cluster_id}`)
@@ -484,7 +517,7 @@ async function scanIPs() {
       }
 
       try {
-        const res: any = await http.post('/devices/network/scan', { ips })
+        const res: any = await http.post('/devices/network/scan', { ips }, { timeout: 120000 })
         const found = res.devices || []
         discoveredDevices.value.push(...found)
       } catch (e: any) {
@@ -537,7 +570,7 @@ async function startCluster() {
     const detail: any = await http.get(`/tests/cluster/${res.cluster_id}`)
     activeClusters.value.push({
       clusterId: res.cluster_id,
-      testType: 'se9_interface_test',
+      testType: currentTestType.value,
       status: 'running',
       nodes: detail.nodes || [],
       summary: detail.summary || { total: 0, completed: 0, failed: 0, running: 0 },

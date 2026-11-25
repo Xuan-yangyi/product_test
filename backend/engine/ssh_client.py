@@ -48,6 +48,11 @@ class SSHClient:
         self.ip = ip
         self._client = paramiko.SSHClient()
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # 探测场景下抑制 paramiko 内部 transport 的 banner 错误日志
+        _paramiko_transport_logger = logging.getLogger("paramiko.transport")
+        _old_level = _paramiko_transport_logger.level
+        if quiet:
+            _paramiko_transport_logger.setLevel(logging.CRITICAL)
         try:
             self._client.connect(ip, port=port, username=user, password=password, timeout=timeout)
             # 启用 keepalive 防止长时传输断连
@@ -61,6 +66,9 @@ class SSHClient:
             (logger.debug if quiet else logger.error)(f"SSH 连接 {ip} 失败: {e}")
             self._client = None
             return False
+        finally:
+            if quiet:
+                _paramiko_transport_logger.setLevel(_old_level)
 
     def exec_cmd(self, cmd: str, timeout: int = 30, sudo: bool = False, sudo_password: str = "") -> tuple:
         """执行命令

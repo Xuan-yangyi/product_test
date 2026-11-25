@@ -3,7 +3,7 @@
     <div class="chat-messages" ref="msgContainer">
       <div v-if="messages.length === 0" class="chat-empty">
         <div class="empty-icon">🤖</div>
-        <p>AI 老化测试分析助手</p>
+        <p>AI 测试分析助手</p>
         <p class="empty-hint">点击下方按钮分析日志，或直接输入分析需求</p>
       </div>
       <div
@@ -28,7 +28,14 @@
     </div>
 
     <div class="chat-actions">
-      <el-button size="small" @click="analyzeLogs" :loading="loading && analyzingMode === 'deepseek'" type="primary">
+      <el-button
+        size="small"
+        @click="analyzeLogs"
+        :loading="loading && analyzingMode === 'deepseek'"
+        :disabled="!quickAvailable"
+        :title="quickAvailable ? '' : '未配置大模型 API 端点，请使用「深度分析 (Claude)」'"
+        type="primary"
+      >
         📊 快速分析
       </el-button>
       <el-button size="small" @click="claudeAnalyze" :loading="loading && analyzingMode === 'claude'" type="success">
@@ -82,6 +89,8 @@ const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
 const loading = ref(false)
 const analyzingMode = ref('')  // 'deepseek' | 'claude' | 'errors'
+// 大模型端点是否可用（占位符端点时禁用「快速分析」，引导用 Claude 深度分析）
+const quickAvailable = ref(true)
 const msgContainer = ref<HTMLElement>()
 
 function scrollToBottom() {
@@ -227,11 +236,20 @@ function clearChat() {
 // 暴露方法供父组件调用
 defineExpose({ analyzeLogs, analyzeErrors, clearChat })
 
-onMounted(() => {
+onMounted(async () => {
+  // 探测大模型端点配置：占位符/空端点时禁用快速分析
+  try {
+    const cfg: any = await http.get('/ai/config')
+    const ep = String(cfg?.endpoint || '')
+    quickAvailable.value = !!ep && !ep.includes('your-api-endpoint.com')
+  } catch {
+    quickAvailable.value = false
+  }
+
   // 自动发送欢迎消息
   messages.value.push({
     role: 'assistant',
-    content: '你好！我是 AI 老化测试分析助手。我可以帮你：\n\n- **分析日志**：自动读取老化日志和系统日志进行分析\n- **分析错误**：专门检查日志中的错误和异常\n- **自由提问**：直接在下方输入你的分析需求\n\n请点击按钮或输入需求开始分析。',
+    content: '你好！我是 AI 测试分析助手。我可以帮你：\n\n- **分析日志**：自动读取测试日志（系统日志 / 老化日志）进行分析\n- **分析错误**：专门检查日志中的错误和异常\n- **自由提问**：直接在下方输入你的分析需求\n\n请点击按钮或输入需求开始分析。',
     timestamp: Date.now(),
   })
 })

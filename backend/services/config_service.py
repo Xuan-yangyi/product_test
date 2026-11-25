@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 TEST_TYPE_TO_SECTION = {
     "se9_interface_test": "SE9_interface_test",
     "evb_interface_test": "EVB_interface_test",
+    "se13_interface_test": "SE13_interface_test",
     "se9_aging_test": "SoC_aging_test",
     "evb_aging_test": "SoC_aging_test",
+    "se13_aging_test": "SE13_aging_test",
 }
 
 # 测试类型 → 脚本子目录映射
@@ -31,6 +33,8 @@ TEST_TYPE_TO_CFG_SUBDIR = {
     "se9_mac_check": "SE9_cfg",
     "evb_interface_test": "EVB_cfg",
     "evb_aging_test": "EVB_cfg",
+    "se13_interface_test": "SE13_cfg",
+    "se13_aging_test": "SE13_cfg",
 }
 
 
@@ -213,9 +217,45 @@ class ConfigService:
         test_cases = self.get_test_cases(test_type)
         enabled_cases = [c for c in test_cases if c["enabled"]]
 
+        # 如果启用了任何需要脚本的测试项，自动注入 upload_test_files 作为前置步骤
+        has_script = False
+        has_upload = False
+        from ..engine.script_runner import CASE_TO_SECTION, TEST_TYPE_TO_DATA_SUBDIR
+        data_dir_name = TEST_TYPE_TO_DATA_SUBDIR.get(test_type, "SE9_test_files")
+        for c in enabled_cases:
+            if c["name"] == "upload_test_files":
+                has_upload = True
+            section = CASE_TO_SECTION.get(c["name"], c["name"])
+            # 检查是否是需要 cd 到 /data/xxx 执行的脚本测试
+            if section not in ("chip_type_check", "firmware_version_check",
+                               "ddr_size_check", "check_inter_flag"):
+                has_script = True
+        # 确保 remove_test_files 始终在最后执行（清理在所有测试完成后）
+        rm_idx = None
+        for idx, c in enumerate(enabled_cases):
+            if c["name"] == "remove_test_files":
+                rm_idx = idx
+                break
+        if rm_idx is not None:
+            rm_case = enabled_cases.pop(rm_idx)
+            enabled_cases.append(rm_case)
+
+        if has_script and not has_upload:
+            # 注入 upload_test_files 到最前面
+            enabled_cases.insert(0, {"name": "upload_test_files", "label": "上传测试文件",
+                                     "enabled": True, "_auto_injected": True})
+            import logging
+            logging.getLogger(__name__).info(f"自动注入 upload_test_files (目标目录: /data/{data_dir_name}/)")
+
         steps = []
         for i, case in enumerate(enabled_cases):
             name = case["name"]
+
+            # SE13: SN/MAC 由 burn_oem.sh 一次性写入（同一脚本覆盖 OEM/SN/MAC），
+            # 独立执行会因缺少 <name> <value> 参数而误报 QA_FAIL_OEM，故跳过
+            if name in ("burn_sn", "burn_mac"):
+                logger.info(f"[{test_type}] {name} 由「烧录OEM」统一写入，跳过独立执行")
+                continue
 
             # OEM 写入：只有用户明确要求时才执行
             if name == "burn_oem":
@@ -324,7 +364,25 @@ class ConfigService:
                         ssh = context.get("ssh_client")
                         if not ssh:
                             return False
-                        local_tgz = str(Config.ATHENA2_ROOT / "data" / "AGING_test_files" / "soc_aging" / "athena2_soc_aging_v1_2_5.tgz")
+                        # 实时执行 bm_version 检测芯片型号（比 params 更可靠）
+                        chip_model = ""
+                        try:
+                            sdk_out, _, _ = ssh.exec_cmd("bm_version 2>/dev/null", timeout=10)
+                            sdk_lower = sdk_out.lower()
+                            if "cv84x6" in sdk_lower:
+                                chip_model = "cv84x6"
+                            elif "bm1688" in sdk_lower:
+                                chip_model = "bm1688"
+                            elif "cv186ah" in sdk_lower:
+                                chip_model = "cv186ah"
+                        except Exception:
+                            pass
+                        if not chip_model:
+                            chip_model = context.get("params", {}).get("chip_model", "bm1688")
+                        if chip_model in ("cv84x6",):
+                            local_tgz = str(Config.ATHENA2_ROOT / "data" / "AGING_test_files" / "se13_aging" / "cv84x6_soc_aging.tgz")
+                        else:
+                            local_tgz = str(Config.ATHENA2_ROOT / "data" / "AGING_test_files" / "soc_aging" / "athena2_soc_aging_v1_2_5.tgz")
                         import os as _os
                         if not _os.path.exists(local_tgz):
                             logger.error(f"本地 tgz 文件不存在: {local_tgz}")
@@ -358,6 +416,9 @@ class ConfigService:
                         _aging_version = _version_match.group(1).replace("_", ".") if _version_match else "unknown"
                         _push_log(f"老化测试版本: v{_aging_version}")
 
+                        # SE13(cv84x6) vs SE9(bm1688/cv186ah) 不同老化目录
+                        _aging_dir = "cv84x6_soc_aging" if chip_model in ("cv84x6",) else "soc_aging"
+
                         # 1. 幂等性检查：比对本地 tgz 的 MD5 与设备上的部署标记文件
                         _push_log("检查设备上是否已有老化文件...")
                         import hashlib as _hashlib
@@ -378,7 +439,7 @@ class ConfigService:
 
                         # 检查设备上的部署标记文件
                         stdout, _, _ = ssh.exec_cmd(
-                            "cat /data/soc_aging/.deploy_md5 2>/dev/null || echo NOT_FOUND",
+                            f"cat /data/{_aging_dir}/.deploy_md5 2>/dev/null || echo NOT_FOUND",
                             timeout=10, sudo=True, sudo_password="linaro"
                         )
                         _remote_md5 = stdout.strip()
@@ -415,7 +476,7 @@ class ConfigService:
                         # 3. 写入部署标记文件（用于后续快速幂等检查）
                         _push_log("写入部署标记...")
                         stdout, stderr, code = ssh.exec_cmd(
-                            f"echo '{_local_md5}' > /data/soc_aging/.deploy_md5",
+                            f"echo '{_local_md5}' > /data/{_aging_dir}/.deploy_md5",
                             timeout=10, sudo=True, sudo_password="linaro"
                         )
                         if code != 0:
@@ -425,7 +486,7 @@ class ConfigService:
                         # 4. 设置权限
                         _push_log("设置文件权限...")
                         stdout, stderr, code = ssh.exec_cmd(
-                            "chmod -R 755 /data/soc_aging",
+                            f"chmod -R 755 /data/{_aging_dir}",
                             timeout=30, sudo=True, sudo_password="linaro"
                         )
                         if code != 0:
@@ -452,7 +513,21 @@ class ConfigService:
                         params = context.get("params", {})
                         loop = params.get("loop", 0)
                         reboot = params.get("reboot", 0)
-                        chip_type = params.get("chip_model", "bm1688")
+                        # 实时检测芯片型号（params 可能为空）
+                        chip_type = ""
+                        try:
+                            _sdk_out, _, _ = ssh.exec_cmd("bm_version 2>/dev/null", timeout=10)
+                            _sdk_l = _sdk_out.lower()
+                            if "cv84x6" in _sdk_l:
+                                chip_type = "cv84x6"
+                            elif "bm1688" in _sdk_l:
+                                chip_type = "bm1688"
+                            elif "cv186ah" in _sdk_l:
+                                chip_type = "cv186ah"
+                        except Exception:
+                            pass
+                        if not chip_type:
+                            chip_type = params.get("chip_model", "bm1688")
                         test_id = context.get("test_id", "")
                         on_log = context.get("_on_log_callback")
 
@@ -476,12 +551,45 @@ class ConfigService:
 
                         _push_syslog(f"启动老化测试: loop={loop}, reboot={reboot}, chip_type={chip_type}")
 
-                        cmd = (
-                            f"sh -c 'cd /data/soc_aging && "
-                            f"nohup ./aging.sh --chip_type {chip_type} "
-                            f"--loop {loop} --reboot {reboot} "
-                            f"> /dev/null 2>&1 & echo AGING_STARTED'"
-                        )
+                        if chip_type == "cv84x6":
+                            # SE13 老化脚本仅支持 --aging_time（不支持 --loop/--reboot）
+                            _aging_time = params.get("aging_time", 86400)
+
+                            # 启动前先停掉旧实例，避免并发运行（重启/恢复场景）
+                            # 注意：exec_cmd 的 sudo 包装是 echo pw | sudo -S {cmd}，
+                            # 管道只作用于第一条命令。必须用 sh -c '...' 把整段包起来，
+                            # 否则 kill/pkill 以 linaro 身份运行，杀不掉 root 的老化进程。
+                            _kill_inner = (
+                                "cd /data/cv84x6_soc_aging 2>/dev/null; "
+                                "if [ -f .aging.pid ]; then "
+                                "kill -TERM $(cat .aging.pid) 2>/dev/null; sleep 3; "
+                                "kill -9 $(cat .aging.pid) 2>/dev/null; rm -f .aging.pid; "
+                                "fi; "
+                                "pkill -9 -f \"[c]v84x6_soc_aging --aging_time\" 2>/dev/null; sleep 1; "
+                                "for f in results/*/*.pgid; do "
+                                "[ -e \"$f\" ] && kill -9 -$(head -n 1 \"$f\") 2>/dev/null; "
+                                "done; "
+                                "sleep 1; echo KILLED"
+                            )
+                            _kill_cmd = "sh -c '" + _kill_inner + "'"
+                            try:
+                                ssh.exec_cmd(_kill_cmd, timeout=30, sudo=True, sudo_password="linaro")
+                            except Exception:
+                                pass
+
+                            cmd = (
+                                f"sh -c 'cd /data/cv84x6_soc_aging && "
+                                f"nohup ./cv84x6_soc_aging --aging_time {_aging_time} "
+                                f"--chip cv84x6 --chip_mode soc "
+                                f"> /data/aging.log 2>&1 & echo $! > .aging.pid; echo AGING_STARTED'"
+                            )
+                        else:
+                            cmd = (
+                                f"sh -c 'cd /data/soc_aging && "
+                                f"nohup ./aging.sh --chip_type {chip_type} "
+                                f"--loop {loop} --reboot {reboot} "
+                                f"> /dev/null 2>&1 & echo AGING_STARTED'"
+                            )
                         stdout, stderr, code = ssh.exec_cmd(
                             cmd, timeout=30, sudo=True, sudo_password="linaro"
                         )
@@ -595,9 +703,14 @@ class ConfigService:
                                     new_pos += len(line.encode()) + 1
 
                                     if source == "aging":
-                                        if "AGING_PASS_TEST" in line or "AGING_REBOOT_PASS" in line:
+                                        # SE9: AGING_PASS_TEST / AGING_REBOOT_PASS
+                                        # SE13: AGING_PASS_ALL / AGING_FAIL:
+                                        if ("AGING_PASS_TEST" in line or "AGING_REBOOT_PASS" in line
+                                                or "AGING_PASS_ALL" in line):
                                             has_pass = True
-                                        if "AGING_FAIL_TEST" in line or "AGING_REBOOT_FAIL" in line:
+                                        # 注意：模块级 AGING_FAIL_<MODULE> 不算整体失败，只认最终 "AGING_FAIL:"
+                                        if ("AGING_FAIL_TEST" in line or "AGING_REBOOT_FAIL" in line
+                                                or "AGING_FAIL:" in line):
                                             has_fail = True
 
                             return new_pos, has_pass, has_fail
@@ -784,7 +897,15 @@ class ConfigService:
                             _push_log("上传测试文件失败: 无 SSH 连接")
                             return False
 
-                        local_dir = _Config_up.DATA_DIR / "SE9_test_files"
+                        local_dir = _Config_up.DATA_DIR / {
+                            "se9_interface_test": "SE9_test_files",
+                            "se9_aging_test": "SE9_test_files",
+                            "se9_mac_check": "SE9_test_files",
+                            "evb_interface_test": "EVB_test_files",
+                            "evb_aging_test": "EVB_test_files",
+                            "se13_interface_test": "SE13_test_files",
+                            "se13_aging_test": "SE13_test_files",
+                        }.get(context.get("test_type", ""), "SE9_test_files")
                         if not local_dir.exists():
                             _push_log(f"上传测试文件失败: 本地目录不存在 {local_dir}")
                             return False
@@ -792,9 +913,20 @@ class ConfigService:
                         _push_log("开始上传测试文件到设备...")
                         try:
                             # 创建远程目录
-                            ssh.exec_cmd("mkdir -p /data/SE9_test_files", timeout=10,
+                            # 根据 test_type 确定 DUT 上测试文件目录
+                            _test_type = context.get("test_type", "")
+                            _remote_dir = {
+                                "se9_interface_test": "/data/SE9_test_files",
+                                "se9_aging_test": "/data/SE9_test_files",
+                                "se9_mac_check": "/data/SE9_test_files",
+                                "evb_interface_test": "/data/EVB_test_files",
+                                "evb_aging_test": "/data/EVB_test_files",
+                                "se13_interface_test": "/data/SE13_test_files",
+                                "se13_aging_test": "/data/SE13_test_files",
+                            }.get(_test_type, "/data/SE9_test_files")
+                            ssh.exec_cmd(f"mkdir -p {_remote_dir}", timeout=10,
                                         sudo=True, sudo_password="linaro")
-                            ssh.exec_cmd("chown linaro:linaro /data/SE9_test_files", timeout=10,
+                            ssh.exec_cmd(f"chown linaro:linaro {_remote_dir}", timeout=10,
                                         sudo=True, sudo_password="linaro")
 
                             # 逐个上传文件
@@ -807,18 +939,18 @@ class ConfigService:
                                 if fname.endswith(".md5"):
                                     continue
                                 _push_log(f"  上传: {fname}")
-                                remote_path = f"/data/SE9_test_files/{fname}"
+                                remote_path = f"{_remote_dir}/{fname}"
                                 ok = ssh.upload_file(str(local_path), remote_path)
                                 if not ok:
                                     _push_log(f"  上传失败: {fname}")
                                     all_ok = False
 
                             if all_ok:
-                                ssh.exec_cmd("chmod +x /data/SE9_test_files/*.sh", timeout=10,
+                                ssh.exec_cmd(f"chmod +x {_remote_dir}/*.sh", timeout=10,
                                             sudo=True, sudo_password="linaro")
                                 _push_log("测试文件上传完成，开始 md5sum 校验...")
                                 # 从本地 md5 文件读取期望值
-                                md5_file = local_dir / "SE9_test_files.md5"
+                                md5_file = local_dir / f"{local_dir.name}.md5"
                                 if md5_file.exists():
                                     with open(str(md5_file), "r") as _mf:
                                         expected = {}
@@ -831,7 +963,7 @@ class ConfigService:
                                                 expected[parts[1].lstrip("./")] = parts[0]
 
                                     stdout, _, _ = ssh.exec_cmd(
-                                        "cd /data/SE9_test_files && md5sum * 2>/dev/null", timeout=30,
+                                        f"cd {_remote_dir} && md5sum * 2>/dev/null", timeout=30,
                                         sudo=True, sudo_password="linaro"
                                     )
                                     for line in stdout.split("\n"):
@@ -892,7 +1024,17 @@ class ConfigService:
 
                         _push_log("清理设备上的测试文件...")
                         try:
-                            ssh.exec_cmd("rm -rf /data/SE9_test_files", timeout=10,
+                            _test_type_rm = context.get("test_type", "")
+                            _remote_dir_rm = {
+                                "se9_interface_test": "/data/SE9_test_files",
+                                "se9_aging_test": "/data/SE9_test_files",
+                                "se9_mac_check": "/data/SE9_test_files",
+                                "evb_interface_test": "/data/EVB_test_files",
+                                "evb_aging_test": "/data/EVB_test_files",
+                                "se13_interface_test": "/data/SE13_test_files",
+                                "se13_aging_test": "/data/SE13_test_files",
+                            }.get(_test_type_rm, "/data/SE9_test_files")
+                            ssh.exec_cmd(f"rm -rf {_remote_dir_rm}", timeout=10,
                                         sudo=True, sudo_password="linaro")
                             _push_log("测试文件清理完成")
                             return True
@@ -1356,6 +1498,27 @@ class ConfigService:
         return descriptions.get(type_key, "")
 
     def _get_case_label(self, case_name: str) -> str:
+        # 已知标签映射（与前端 caseLabelMap 对齐）
+        _label_map = {
+            "drive_check": "SSD/硬盘检测",
+            "4g_check": "4G模块检测",
+            "wifi_check": "WiFi检测",
+            "eth_check": "以太网检测",
+            "usb_check": "USB检测",
+            "emmc_check": "eMMC检测",
+            "can_check": "CAN检测",
+            "ssd_check": "SSD检测",
+            "io_check": "IO检测",
+            "rs232_check": "RS232检测",
+            "rs485_check": "RS485检测",
+            "burn_oem": "烧录OEM",
+            "burn_sn": "烧录SN",
+            "burn_mac": "烧录MAC",
+            "upload_test_files": "上传测试文件",
+            "remove_test_files": "清理测试文件",
+        }
+        if case_name in _label_map:
+            return _label_map[case_name]
         return case_name.replace("_", " ").title()
 
     # ============================================================

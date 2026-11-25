@@ -19,9 +19,22 @@ TEST_TYPE_TO_CFG_SUBDIR = {
     "se9_mac_check": "SE9_cfg",
     "evb_interface_test": "EVB_cfg",
     "evb_aging_test": "EVB_cfg",
+    "se13_interface_test": "SE13_cfg",
+    "se13_aging_test": "SE13_cfg",
 }
 # case_name (test_case_config.ini key) → section_name (script_cmd_cfg.ini [section])
 # 旧 PyQt5 代码在 _run() 中手动映射，Web 端需要此表统一转换
+# test_type → DUT 测试文件目录名（/data/{name}/）
+TEST_TYPE_TO_DATA_SUBDIR = {
+    "se9_interface_test": "SE9_test_files",
+    "se9_aging_test": "SE9_test_files",
+    "se9_mac_check": "SE9_test_files",
+    "evb_interface_test": "EVB_test_files",
+    "evb_aging_test": "EVB_test_files",
+    "se13_interface_test": "SE13_test_files",
+    "se13_aging_test": "SE13_test_files",
+}
+
 CASE_TO_SECTION = {
     "audio_check": "AUDIO",
     "usb_check": "USB",
@@ -41,6 +54,15 @@ CASE_TO_SECTION = {
     "rs232_check": "RS232",
     "rs485_check": "RS485",
     "io_check": "IO",
+    "4g_check": "4G",
+    "wifi_check": "WIFI",
+    "can_check": "CAN",
+    "ssd_check": "SSD",
+    "hdmi_resolution_check": "HDMI_RESOLUTION",
+    "usb_flash_check": "USB_FLASH",
+    "memory_storage_check": "MEMORY_STORAGE",
+    "hw_status_check": "HW_STATUS",
+    "se13_usb_4g_check": "SE13_USB_4G",
 }
 
 
@@ -121,7 +143,8 @@ class ScriptRunner:
 
         cmd = case["cmd"]
         if cmd.startswith("./"):
-            cmd = f"cd /data/SE9_test_files && {cmd}"
+            data_dir = TEST_TYPE_TO_DATA_SUBDIR.get(self._test_type, "SE9_test_files")
+            cmd = f"cd /data/{data_dir} && {cmd}"
         timeout = timeout or case["timeout"]
         pass_flag = case["pass_flag"]
         fail_flag = case["fail_flag"]
@@ -166,7 +189,8 @@ class ScriptRunner:
 
         cmd = case["cmd"]
         if cmd.startswith("./"):
-            cmd = f"cd /data/SE9_test_files && {cmd}"
+            data_dir = TEST_TYPE_TO_DATA_SUBDIR.get(self._test_type, "SE9_test_files")
+            cmd = f"cd /data/{data_dir} && {cmd}"
         timeout = timeout or case["timeout"]
         pass_flag = case["pass_flag"]
         fail_flag = case["fail_flag"]

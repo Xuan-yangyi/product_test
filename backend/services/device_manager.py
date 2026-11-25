@@ -51,23 +51,37 @@ class DeviceManager:
                 parts = [merged_out, "", ""]
             stdout, stdout2, stdout3 = parts[0], parts[1], parts[2]
 
-            # 1. show_ddr — 芯片型号 & DDR 容量
-            out = stdout.strip()
-            out_lower = out.lower()
-            if "bm1688" in out_lower:
+            # 1. bm_version 优先识别芯片（SE13 的 show_ddr 误报 bm1688，bm_version 正确报告 CV84X6）
+            sdk_out = stdout3.strip()
+            sdk_lower = sdk_out.lower()
+            if "cv84x6" in sdk_lower:
+                info["chip_model"] = "cv84x6"
+                info["device_type"] = "SE13"
+            elif "bm1688" in sdk_lower:
                 info["chip_model"] = "bm1688"
                 info["device_type"] = "SE9"
-            elif "cv186ah" in out_lower:
+            elif "cv186ah" in sdk_lower:
                 info["chip_model"] = "cv186ah"
                 info["device_type"] = "SE9"
-            elif "cv84x6" in out_lower:
-                info["chip_model"] = "cv84x6"
-                info["device_type"] = "SE12"
-            elif out:
-                m = re.search(r'(bm\d+|cv\w+)', out_lower)
-                if m:
-                    info["chip_model"] = m.group(1)
-                    info["device_type"] = "其他"
+
+            # 2. show_ddr — DDR 容量 + 芯片型号（bm_version 未识别时回退）
+            out = stdout.strip()
+            out_lower = out.lower()
+            if not info["chip_model"]:
+                if "bm1688" in out_lower:
+                    info["chip_model"] = "bm1688"
+                    info["device_type"] = "SE9"
+                elif "cv186ah" in out_lower:
+                    info["chip_model"] = "cv186ah"
+                    info["device_type"] = "SE9"
+                elif "cv84x6" in out_lower:
+                    info["chip_model"] = "cv84x6"
+                    info["device_type"] = "SE13"
+                elif out:
+                    m = re.search(r'(bm\d+|cv\w+)', out_lower)
+                    if m:
+                        info["chip_model"] = m.group(1)
+                        info["device_type"] = "其他"
 
             m = re.search(r'SIZE\s*:\s*(\d+)\s*(MB|GB)', out, re.IGNORECASE)
             if m:
@@ -89,9 +103,8 @@ class DeviceManager:
                     if val not in ("INTERFACE_FLAG",) and not re.match(r'^0x[0-9a-fA-F]+$', val):
                         info["module_type"] = val
 
-            # 3. bm_version — SDK 版本，提取版本号如 "2.2"（已在合并命令中取回）
+            # 3. bm_version — SDK 版本提取（芯片型号已在上面从 bm_version 解析）
             ssh.close()
-            sdk_out = stdout3.strip()
             if sdk_out:
                 # 从 "SophonSDK(BM1688) 2.2" 中提取版本号
                 m = re.search(r'(\d+\.\d+(?:\.\d+)?)', sdk_out)

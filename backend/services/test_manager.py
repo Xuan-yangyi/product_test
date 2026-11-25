@@ -36,6 +36,17 @@ class TestManager:
         """创建测试任务"""
         test_id = str(uuid.uuid4())[:12]
 
+        # 产品型号按 test_type 归一化，避免调用方漏传/传错（如 se13 记为 SE9）
+        _tt = (test_type or "").lower()
+        if _tt.startswith("se13"):
+            product_model = "SE13"
+        elif _tt.startswith("evb"):
+            product_model = "EVB"
+        elif _tt.startswith("se9"):
+            product_model = "SE9"
+        elif not product_model:
+            product_model = ""
+
         task = {
             "test_id": test_id,
             "test_type": test_type,

@@ -18,6 +18,10 @@ RE_LOOP_DONE = re.compile(r"aging test loop (\d+) done, use (\d+)")
 RE_LOOP_PASS = re.compile(r"soc aging test loop (\d+) pass")
 RE_LOOP_FAIL = re.compile(r"soc aging test loop (\d+) fail")
 RE_TEMP_LINE = re.compile(r"current time:.*chip temp: (\d+);\s*aging time: (\d+)")
+# SE13 老化日志格式: "Aging: 40s  Temp: 36.4°C"（温度已是摄氏度）
+RE_TEMP_LINE_SE13 = re.compile(r"Aging:\s*(\d+)s\s+Temp:\s*([0-9.]+)")
+# ANSI 颜色码（SE13 脚本输出带颜色）
+RE_ANSI = re.compile(r"\x1b\[[0-9;]*m|\[[0-9]{1,2}m")
 RE_REBOOT_COUNT = re.compile(r"reboot_count (\d+)")
 RE_MODULE_PASS = re.compile(r"AGING_PASS_(\w+)")
 RE_MODULE_FAIL = re.compile(r"AGING_FAIL_(\w+)")
@@ -155,22 +159,36 @@ def parse_temperature(test_id: str, log_dir: Path) -> dict:
     temps = []
 
     for line in content.split("\n"):
-        m = RE_TEMP_LINE.search(line)
+        clean = RE_ANSI.sub("", line)
+
+        temp_c = None
+        aging_sec = 0
+
+        # SE9 格式: current time: ... chip temp: <millideg>; aging time: <sec>
+        m = RE_TEMP_LINE.search(clean)
         if m:
-            temp_raw = int(m.group(1))
+            temp_c = round(int(m.group(1)) / 1000.0, 1)
             aging_sec = int(m.group(2))
-            temp_c = round(temp_raw / 1000.0, 1)
+        else:
+            # SE13 格式: Aging: <sec>s  Temp: <celsius>°C
+            m = RE_TEMP_LINE_SE13.search(clean)
+            if m:
+                aging_sec = int(m.group(1))
+                temp_c = round(float(m.group(2)), 1)
 
-            # 提取时间戳
-            ts_match = re.match(r"\[([^\]]+)\]", line)
-            time_str = ts_match.group(1) if ts_match else ""
+        if temp_c is None:
+            continue
 
-            data.append({
-                "time": time_str,
-                "temp_c": temp_c,
-                "aging_sec": aging_sec,
-            })
-            temps.append(temp_c)
+        # 提取时间戳
+        ts_match = re.match(r"\[([^\]]+)\]", clean)
+        time_str = ts_match.group(1) if ts_match else ""
+
+        data.append({
+            "time": time_str,
+            "temp_c": temp_c,
+            "aging_sec": aging_sec,
+        })
+        temps.append(temp_c)
 
     max_temp = round(max(temps), 1) if temps else 0
     avg_temp = round(sum(temps) / len(temps), 1) if temps else 0

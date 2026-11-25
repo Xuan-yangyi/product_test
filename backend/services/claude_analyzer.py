@@ -72,7 +72,7 @@ class ClaudeAnalyzer:
     def _build_prompt(self, test_id: str, aging_log: Path, syslog: Path) -> str:
         """构建 Claude 分析 prompt"""
         prompt_parts = [
-            f"请对嵌入式设备 SE9 的老化测试日志进行深度分析，测试 ID: {test_id}。",
+            f"请对嵌入式设备（SE9 / SE13）的测试日志进行深度分析（可能是整机接口测试或老化测试），测试 ID: {test_id}。",
             "",
             "请直接读取以下文件进行分析：",
         ]

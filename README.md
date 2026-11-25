@@ -81,9 +81,11 @@ cd backend && pip install -r requirements.txt && cd ..
 # 前端依赖
 cd frontend && npm install && cd ..
 
-# AI 分析配置（可选）
-cp cfg/ai_config.json.example cfg/ai_config.json
-# 编辑 cfg/ai_config.json，填入 API 地址和密钥
+# AI 分析配置（可选，二选一）
+./setup_ai.sh                    # 交互式：回车用默认端点/模型，再输入 Key
+# 或非交互（推荐 CI/批量部署，Key 走环境变量，避免出现在 ps 命令行）
+AI_API_KEY=sk-xxx ./setup_ai.sh --endpoint https://www.sophnet.com/api/open-apis/v1/chat/completions \
+    --model DeepSeek-V4.1-Flash-1017 --test
 ```
 
 ### 2. MediaMTX 部署

@@ -154,6 +154,24 @@ class AiService:
             "model": result.get("model"),
         }
 
+    def _get_test_meta(self, test_id: str) -> tuple:
+        """从结果库读取 (test_type, product_model)，供 prompt 使用"""
+        try:
+            import sqlite3
+            from ..config import Config
+            db = Config.ATHENA2_ROOT / "data" / "results.db"
+            con = sqlite3.connect(str(db), timeout=3)
+            row = con.execute(
+                "SELECT test_type, product_model FROM web_test_records WHERE test_id=?",
+                (test_id,),
+            ).fetchone()
+            con.close()
+            if row:
+                return (row[0] or "", row[1] or "")
+        except Exception:
+            pass
+        return ("", "")
+
     def _build_test_context(self, test_id: str) -> str:
         """构建测试上下文信息，让 AI 知道当前测试的日志位置和状态"""
         from ..config import Config
@@ -162,10 +180,13 @@ class AiService:
         aging_log_path = log_dir / f"aging_{test_id}.log"
         syslog_path = log_dir / f"syslog_{test_id}.log"
 
+        _tt, _pm = self._get_test_meta(test_id)
+        _kind = "老化测试" if "aging" in (_tt or "") else ("整机接口测试" if _tt else "测试")
         context_parts = [
             f"【当前测试上下文】",
             f"测试 ID: {test_id}",
-            f"设备类型: SE9 嵌入式设备",
+            f"测试类型: {_tt or '未知'}（{_kind}）",
+            f"产品型号/芯片: {_pm or '未知'}",
         ]
 
         if aging_log_path.exists():
@@ -207,14 +228,16 @@ class AiService:
 
     def _build_analysis_prompt(self, aging_log: str, syslog: str, test_id: str) -> str:
         """构建老化测试日志分析 prompt"""
+        _tt, _pm = self._get_test_meta(test_id)
+        _kind = "老化测试" if "aging" in (_tt or "") else ("整机接口测试" if _tt else "测试")
         parts = [
-            f"请分析以下嵌入式设备（SE9）老化测试的日志，测试 ID: {test_id}。",
+            f"请分析以下嵌入式设备（型号/芯片: {_pm or '未知'}）的{_kind}日志，测试 ID: {test_id}。",
             "",
             "请从以下几个方面进行分析：",
-            "1. 测试执行概况（循环次数、耗时、完成状态）",
-            "2. 芯片温度变化趋势与异常",
-            "3. 错误和警告信息（如有）",
-            "4. 性能评估（每轮耗时分布）",
+            "1. 测试执行概况（步骤/轮次、耗时、完成状态）",
+            "2. 失败项与根因定位（如有）",
+            "3. 芯片温度变化趋势与异常（如为老化测试）",
+            "4. 错误和警告信息（如有）",
             "5. 优化建议",
             "",
         ]
@@ -285,7 +308,7 @@ class AiService:
         error_text = "\n".join(error_lines[-200:])  # 限制长度
 
         prompt = (
-            "请分析以下老化测试日志中的错误和异常信息，测试 ID: {test_id}。\n\n"
+            "请分析以下测试日志（接口/老化）中的错误和异常信息，测试 ID: {test_id}。\n\n"
             "请：\n"
             "1. 分类错误类型（硬件错误、软件错误、超时、配置问题等）\n"
             "2. 指出最严重的错误\n"

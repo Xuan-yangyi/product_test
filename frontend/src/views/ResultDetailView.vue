@@ -62,6 +62,9 @@
           </div>
           <el-empty v-else description="暂无系统日志" />
         </el-tab-pane>
+        <el-tab-pane label="AI 分析" name="ai" lazy>
+          <AiChat :test-id="testId" />
+        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -71,6 +74,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import ResultBadge from '@/components/ResultBadge.vue'
+import AiChat from '@/components/AiChat.vue'
 import { testApi } from '@/api/test'
 
 const route = useRoute()
@@ -136,5 +140,23 @@ function formatDuration(seconds: number): string {
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.6;
+}
+
+/* 深色卡片上，Tab 文字改为白色系，避免灰色看不清 */
+.log-card :deep(.el-tabs__item) {
+  color: #cfe3ff;
+}
+.log-card :deep(.el-tabs__item:hover) {
+  color: #ffffff;
+}
+.log-card :deep(.el-tabs__item.is-active) {
+  color: #ffffff;
+  font-weight: 600;
+}
+.log-card :deep(.el-tabs__active-bar) {
+  background-color: #ffffff;
+}
+.log-card :deep(.el-tabs__nav-wrap::after) {
+  background-color: rgba(255, 255, 255, 0.15);
 }
 </style>
