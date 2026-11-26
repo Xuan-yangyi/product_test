@@ -28,6 +28,7 @@ class TestManager:
         self._tests: Dict[str, dict] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._loop = None  # 主事件循环引用，由 start_test 延迟设置
+        self._pending_interactions: Dict[str, dict] = {}  # test_id -> 待人工确认请求
 
     async def create_test(self, test_type: str, product_model: str,
                           serial_port: str = None, device_ip: str = None,
@@ -402,6 +403,7 @@ class TestManager:
 
     async def resolve_interaction(self, test_id: str, response: dict):
         """解析交互响应"""
+        self._pending_interactions.pop(test_id, None)
         self.executor.resolve_interaction(test_id, response)
 
     def get_test(self, test_id: str) -> Optional[dict]:
@@ -539,5 +541,22 @@ class TestManager:
         )
 
     async def _on_interaction(self, test_id, step_name, message, dialog_type, timeout):
-        # 存储交互请求，等待前端通过 HTTP 响应
-        pass
+        """记录待人工确认请求，并推送 WebSocket（前端会轮询/推送后弹窗）"""
+        payload = {
+            "test_id": test_id,
+            "step_name": step_name,
+            "message": message,
+            "dialog_type": dialog_type,
+            "timeout": timeout,
+            "created_at": datetime.now().isoformat(),
+        }
+        self._pending_interactions[test_id] = payload
+        try:
+            from ..api.ws import broadcast_to_test
+            await broadcast_to_test(test_id, "interaction", payload)
+        except Exception:
+            pass
+
+    def get_pending_interactions(self) -> list:
+        """返回所有待人工确认请求"""
+        return list(self._pending_interactions.values())

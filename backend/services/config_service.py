@@ -247,6 +247,33 @@ class ConfigService:
             import logging
             logging.getLogger(__name__).info(f"自动注入 upload_test_files (目标目录: /data/{data_dir_name}/)")
 
+        _MANUAL_HINTS = {
+            "led_check": "请检查设备的 LED 指示灯是否正常",
+            "hdmi_check": "请检查 HDMI 是否正常显示画面",
+            "power_key_check": "请按下电源键，检查开关机功能是否正常",
+            "reset_key_check": "请按下复位键，检查复位功能是否正常",
+            "rtc_cell_check": "请检查 RTC 电池是否正常（测试前请断开端子跳线）",
+        }
+
+        # 按执行阶段排序（同阶段内保持配置顺序）：
+        # 0 上传 → 1 烧录 → 2 自动测试 → 3 人工确认 → 4 接口标志 → 5 清理
+        _MANUAL_CASES = {"led_check", "hdmi_check", "power_key_check", "reset_key_check", "rtc_cell_check"}
+
+        def _phase(n: str) -> int:
+            if n == "upload_test_files":
+                return 0
+            if n.startswith("burn_"):
+                return 1
+            if n in _MANUAL_CASES:
+                return 3
+            if n == "set_interface_flag":
+                return 4
+            if n == "remove_test_files":
+                return 5
+            return 2
+
+        enabled_cases.sort(key=lambda _c: _phase(_c["name"]))
+
         steps = []
         for i, case in enumerate(enabled_cases):
             name = case["name"]
@@ -821,54 +848,18 @@ class ConfigService:
                     required=True,
                 )
             elif name in ("led_check", "hdmi_check", "power_key_check", "reset_key_check", "rtc_cell_check"):
-                # 交互式检查：旧版弹窗询问操作员，Web 端通过 on_interaction_required 回调实现
-                def make_interactive_execute(case_name, _case=case):
-                    def execute(context):
-                        import os as _os_int
-                        from ..config import Config as _Config_int
-                        test_id = context.get("test_id", "")
-                        on_log = context.get("_on_log_callback")
-                        on_interact = context.get("_on_interaction_callback")
-                        _syslog_path = str(_Config_int.LOG_DIR / f"syslog_{test_id}.log")
-
-                        def _push_log(msg):
-                            ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            if on_log:
-                                on_log(test_id, "INFO", "syslog", msg)
-                            try:
-                                _os_int.makedirs(_os_int.path.dirname(_syslog_path), exist_ok=True)
-                                with open(_syslog_path, "a") as _lf:
-                                    _lf.write(f"[{ts}] {msg}\n")
-                            except Exception:
-                                pass
-
-                        label = _case.get("label", case_name)
-                        _push_log(f"交互检查: {label} — 请在设备端确认")
-                        if on_interact:
-                            try:
-                                result = on_interact(test_id, case_name,
-                                    f"请检查设备: {label} 是否正常？",
-                                    dialog_type="confirm", timeout=300)
-                                if result and result.get("action") == "confirm":
-                                    _push_log(f"交互检查通过: {label} (操作员确认)")
-                                    return True
-                                else:
-                                    _push_log(f"交互检查失败: {label} (操作员取消)")
-                                    return False
-                            except Exception as e:
-                                _push_log(f"交互检查异常: {label} — {e}")
-                                return False
-                        # 无交互回调时默认通过（兼容）
-                        _push_log(f"交互检查: {label} — 无交互回调，默认通过")
-                        return True
-                    return execute
-
+                # 人工检查：由执行器发起 interaction，前端为每一项单独弹窗确认
                 step = TestStep(
                     name=name,
                     label=case["label"],
-                    execute=make_interactive_execute(name),
-                    timeout=300,
+                    execute=(lambda _ctx: True),
+                    timeout=900,
                     required=False,
+                    interaction={
+                        "message": _MANUAL_HINTS.get(name, f"请检查设备：{case['label']} 是否正常") + "（确认=正常 / 取消=异常）",
+                        "dialog_type": "confirm",
+                        "timeout": 900,
+                    },
                 )
             elif name == "upload_test_files":
                 # SCP 上传测试文件到 DUT + md5sum 校验
@@ -1511,6 +1502,11 @@ class ConfigService:
             "io_check": "IO检测",
             "rs232_check": "RS232检测",
             "rs485_check": "RS485检测",
+            "led_check": "LED检查",
+            "hdmi_check": "HDMI检查",
+            "power_key_check": "电源键检查",
+            "reset_key_check": "复位键检查",
+            "rtc_cell_check": "RTC电池检查",
             "burn_oem": "烧录OEM",
             "burn_sn": "烧录SN",
             "burn_mac": "烧录MAC",

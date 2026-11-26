@@ -96,6 +96,8 @@ class TestExecutor:
                     await self._notify("on_log", test_id, "ERROR", step.name, error_msg)
 
                 step_result = StepResultEnum.pass_ if result else StepResultEnum.fail
+                if not result:
+                    context["_has_failure"] = True
                 message = f"步骤 {step.label} {'通过' if result else '失败'}"
 
                 self._status[test_id]["results"].append({
@@ -132,6 +134,12 @@ class TestExecutor:
     async def _execute_step(self, step: TestStep, context: dict, test_id: str) -> bool:
         """在线程池中执行单个步骤"""
         loop = asyncio.get_event_loop()
+
+        # 接口测试标志：只有所有已选测试项都通过才设置
+        if step.name == "set_interface_flag" and context.get("_has_failure"):
+            await self._notify("on_log", test_id, "WARNING", step.name,
+                               "存在失败的测试项，跳过「设置接口标志」")
+            return False
 
         # 检查是否需要交互
         if hasattr(step, 'interaction') and step.interaction:

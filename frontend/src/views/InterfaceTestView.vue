@@ -231,6 +231,8 @@
         </el-tab-pane>
       </el-tabs>
     </el-dialog>
+
+    <InteractDialog :request="currentInteraction" @response="onInteractionResponse" />
   </div>
 </template>
 
@@ -240,8 +242,10 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh, Delete } from '@element-plus/icons-vue'
 import LogViewer from '@/components/LogViewer.vue'
+import InteractDialog from '@/components/InteractDialog.vue'
 import http from '@/api/http'
 import { configApi } from '@/api/config'
+import { testApi } from '@/api/test'
 import { useProductLine } from '@/stores/productLine'
 
 const { current: currentLine, defaultTestType } = useProductLine()
@@ -309,9 +313,45 @@ const nodeSteps = ref<any[]>([])
 
 let refreshTimer: any = null
 let detailRefreshTimer: any = null
+let interactionTimer: any = null
+const currentInteraction = ref<any>(null)
+
+function deviceIpOf(testId: string): string {
+  for (const c of activeClusters.value) {
+    for (const n of (c.nodes || [])) {
+      if (n.test_id === testId) return n.device_ip || ''
+    }
+  }
+  return ''
+}
+
+async function pollInteractions() {
+  if (currentInteraction.value) return
+  if (!activeClusters.value.some(c => c.status === 'running')) return
+  try {
+    const res: any = await http.get('/tests/interactions/pending')
+    const list = res.interactions || []
+    const mine = list.find((i: any) => !!deviceIpOf(i.test_id))
+    if (mine) {
+      const ip = deviceIpOf(mine.test_id)
+      currentInteraction.value = { ...mine, message: `设备 ${ip}：${mine.message}` }
+    }
+  } catch (e) {}
+}
+
+async function onInteractionResponse(action: string, value?: string) {
+  const req = currentInteraction.value
+  currentInteraction.value = null
+  if (!req) return
+  try {
+    await testApi.sendInteraction(req.test_id, { action, value })
+  } catch (e) {}
+  setTimeout(pollInteractions, 500)
+}
 
 onMounted(async () => {
   await loadExistingClusters()
+  interactionTimer = setInterval(pollInteractions, 2000)
 })
 
 // 产品线切换时更新默认 test_type 并重新加载
@@ -330,6 +370,7 @@ watch(currentLine, (line) => {
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
   if (detailRefreshTimer) clearInterval(detailRefreshTimer)
+  if (interactionTimer) clearInterval(interactionTimer)
 })
 
 watch(detailVisible, (visible) => {

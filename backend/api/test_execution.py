@@ -29,6 +29,12 @@ async def create_test(req: TestRunRequest, tm: TestManager = Depends(get_test_ma
     )
 
 
+@router.get("/tests/interactions/pending")
+async def list_pending_interactions(tm: TestManager = Depends(get_test_manager)):
+    """列出待人工确认的交互请求（接口测试人工检查项）"""
+    return {"interactions": tm.get_pending_interactions()}
+
+
 @router.post("/tests/{test_id}/start")
 async def start_test(test_id: str, tm: TestManager = Depends(get_test_manager)):
     """启动测试"""

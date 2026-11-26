@@ -149,3 +149,29 @@ async def export_results_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=test_results.csv"},
     )
+
+@router.get("/result-batches")
+async def list_result_batches(
+    limit: int = Query(30, ge=1, le=100),
+    days: int = Query(7, ge=1, le=365),
+):
+    """列出最近的测试批次（按 cluster_id 聚合），供"按批次分析"选择"""
+    import sqlite3
+    db = Config.DATA_DIR / "results.db"
+    if not db.exists():
+        return {"batches": []}
+    con = sqlite3.connect(str(db), timeout=5)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute(
+            "SELECT cluster_id, COUNT(*) AS count, MAX(test_type) AS test_type, "
+            "MIN(created_at) AS first_at, MAX(created_at) AS last_at, "
+            "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed "
+            "FROM web_test_records "
+            "WHERE cluster_id != '' AND date(created_at) >= date('now', ?) "
+            "GROUP BY cluster_id ORDER BY last_at DESC LIMIT ?",
+            (f"-{days} days", limit),
+        ).fetchall()
+        return {"batches": [dict(r) for r in rows]}
+    finally:
+        con.close()

@@ -77,6 +77,11 @@ async def claude_analyze(test_id: str):
 
 class SummaryRequest(BaseModel):
     filters: dict = {}
+    test_ids: list[str] = []        # scope=selected 时生效
+    scope: str = "filtered"         # selected | filtered | batch
+    cluster_id: str = ""            # scope=batch 时生效
+    product_lines: list[str] = []   # SE13 / Athena2
+    limit: int = 500
 
 
 @router.get("/summary/engine")
@@ -96,5 +101,15 @@ async def ai_summary(kind: str, req: SummaryRequest | None = None):
     if kind not in ("interface", "aging", "all"):
         raise HTTPException(status_code=400, detail="kind 必须为 interface/aging/all")
     from ..services.summary_analyzer import get_summary_analyzer
-    filters = (req.filters if req else {}) or {}
-    return await get_summary_analyzer().analyze(kind, filters)
+    params = req.model_dump() if req else {}
+    return await get_summary_analyzer().analyze(kind, params)
+
+
+@router.get("/summary/report/{report_id}")
+async def ai_summary_report(report_id: str):
+    """获取已生成的 AI 汇总报告（内存保存 30 分钟）"""
+    from ..services.report_store import get as get_report
+    report = get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="报告不存在或已过期（30 分钟），请重新生成")
+    return report

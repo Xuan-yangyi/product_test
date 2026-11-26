@@ -68,6 +68,12 @@ const router = createRouter({
       meta: { title: '新建产品型号' },
     },
     {
+      path: '/ai-report/:id',
+      name: 'ai-report',
+      component: () => import('@/views/AiReportView.vue'),
+      meta: { title: 'AI 分析报告' },
+    },
+    {
       path: '/result-detail/:id',
       name: 'result-detail',
       component: () => import('@/views/ResultDetailView.vue'),

@@ -7,7 +7,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 # ============================================================================
 # SE13 SSD 接口测试
-# 测试内容: NVMe SSD 检测、挂载、基本读写、异常检测
+# 测试内容: NVMe SSD 检测、挂载、基本读写、卸载（闭环，无故障注入）
 # 特别注意: 如果 SSD 未安装，输出日志说明，标记 SKIP（不静默跳过）
 # ============================================================================
 
@@ -173,14 +173,19 @@ test_ssd_mount_rw() {
         add_result "SSD 挂载读写" "FAIL" "写入失败"
     fi
 
+    # 卸载并确认
     run_sudo umount "$mnt" 2>/dev/null
+    if grep -q "$mnt" /proc/mounts 2>/dev/null; then
+        run_sudo umount -l "$mnt" 2>/dev/null
+    fi
+    if grep -q "$mnt" /proc/mounts 2>/dev/null; then
+        log_fail "SSD 卸载失败: $mnt 仍挂载"
+        add_result "SSD 卸载" "FAIL" "仍挂载 $mnt"
+    else
+        log_pass "SSD 卸载成功"
+        add_result "SSD 卸载" "PASS" "已卸载"
+    fi
     run_sudo rmdir "$mnt" 2>/dev/null
-}
-
-test_ssd_exception() {
-    log_info "=== 2. SSD 异常测试 ==="
-    [ -n "$SSD_DEV" ] && log_info "SSD $SSD_DEV 已连接（故障注入需硬件配合）" || log_info "无 SSD"
-    add_result "SSD 异常" "SKIP" "异常注入需硬件配合"
 }
 
 main() {
@@ -190,7 +195,6 @@ main() {
     test_ssd_presence
     if [ -n "$SSD_DEV" ]; then
         test_ssd_mount_rw
-        test_ssd_exception
     fi
     print_summary
 }

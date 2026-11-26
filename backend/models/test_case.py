@@ -18,6 +18,7 @@ class TestStep:
     execute: Callable                  # 执行函数，签名: (context: dict) -> bool
     timeout: int = 30                  # 超时时间（秒）
     required: bool = True              # 是否必须通过
+    interaction: Optional[dict] = None  # 人工交互：{message, dialog_type, timeout}
     depends_on: List[str] = field(default_factory=list)  # 依赖的前置步骤
     skip_if_failed: bool = False       # 前置步骤失败时是否跳过
 
