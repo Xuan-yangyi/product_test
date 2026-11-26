@@ -69,6 +69,10 @@ class ClaudeAnalyzer:
                 "error": str(e),
             }
 
+    async def run_prompt(self, prompt: str, working_dir: str) -> str:
+        """通用入口：直接运行一段分析 prompt（供批量汇总分析复用）"""
+        return await self._run_claude(prompt, working_dir)
+
     def _build_prompt(self, test_id: str, aging_log: Path, syslog: Path) -> str:
         """构建 Claude 分析 prompt"""
         prompt_parts = [

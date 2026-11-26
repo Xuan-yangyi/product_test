@@ -13,7 +13,7 @@ from .api.camera import router as camera_router
 import socket as _socket
 import logging as _logging
 
-app = FastAPI(title="Athena2 Product Test", version="2.0.0")
+app = FastAPI(title="Athena2 Product Test", version="2.0.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,7 +50,7 @@ async def startup_event():
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "2.0.3"}
 
 # 挂载前端静态文件
 frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"

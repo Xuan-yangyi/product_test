@@ -74,3 +74,27 @@ async def claude_analyze(test_id: str):
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("analysis", "分析失败"))
     return result
+
+class SummaryRequest(BaseModel):
+    filters: dict = {}
+
+
+@router.get("/summary/engine")
+async def ai_summary_engine():
+    """批量汇总分析引擎状态（Claude 是否可用 / provider 偏好）"""
+    from ..services.summary_analyzer import get_summary_analyzer
+    return get_summary_analyzer().engine_status()
+
+
+@router.post("/summary/{kind}")
+async def ai_summary(kind: str, req: SummaryRequest | None = None):
+    """批量结果汇总分析
+
+    kind: interface（接口测试）/ aging（老化测试）/ all（全部）
+    引擎策略：本地 Claude CLI 优先，失败回退到 API Key
+    """
+    if kind not in ("interface", "aging", "all"):
+        raise HTTPException(status_code=400, detail="kind 必须为 interface/aging/all")
+    from ..services.summary_analyzer import get_summary_analyzer
+    filters = (req.filters if req else {}) or {}
+    return await get_summary_analyzer().analyze(kind, filters)

@@ -1,16 +1,25 @@
 # Athena2 Web Product Test
 
-> 嵌入式设备产测工具 — 从 QT 桌面应用迁移至 Web 网页方式，支持 SE9/SE12/EVB 等 CVITEK 芯片平台。
+> 嵌入式设备产测工具 — 从 QT 桌面应用迁移至 Web 网页方式，支持 SE9 / SE13 / EVB 等 CVITEK 芯片平台。
 
 
-[![Release](https://img.shields.io/badge/release-v2.0.1-blue)](https://github.com/Xuan-yangyi/product_test/releases)
+[![Release](https://img.shields.io/badge/release-v2.0.3-blue)](https://github.com/Xuan-yangyi/product_test/releases)
 [![Main](https://img.shields.io/badge/main-development-orange)](https://github.com/Xuan-yangyi/product_test)
 
-> **生产部署（Release）**: `git clone https://github.com/Xuan-yangyi/product_test.git && cd product_test && git checkout v2.0.1 && ./init.sh`
+> **生产部署（Release）**: `git clone https://github.com/Xuan-yangyi/product_test.git && cd product_test && git checkout v2.0.3 && ./init.sh`
 >
 > **开发调试（main）**: `git clone https://github.com/Xuan-yangyi/product_test.git && cd product_test && ./init.sh`
 
 > ⚠️ **老化测试**: Release 不包含老化二进制（约 5.2GB），请从 [Wiki](https://wiki.sophgo.com/pages/viewpage.action?pageId=163064732) 下载并解压到 `data/AGING_test_files/soc_aging/`。
+
+## v2.0.3 更新
+
+- **测试结果页 AI 汇总分析**（右侧面板）：一键分析接口测试 / 老化测试 / 全部汇总，输出总体结论、问题分类、重点排查 SN/IP 清单与处置建议
+- **AI 引擎优先级**：本地 Claude CLI 优先，失败自动回退 API Key；可在 `cfg/ai_config.json` 用 `provider: auto|claude|api` 指定
+- **AI 配置脚本**：`./setup_ai.sh` 一键配置端点/模型/Key 并热加载
+- **测试结果详情**：新增「AI 分析」Tab，支持接口/老化日志分析
+
+---
 
 ## 架构
 
@@ -44,16 +53,17 @@ product_test/
 | 设备通信 | paramiko (SSH), pyserial (串口) |
 | 实时推送 | WebSocket |
 | 预览中继 | MediaMTX (RTMP → WebRTC) |
-| AI 分析 | DeepSeek API + Claude CLI |
+| AI 分析 | 单测分析 + 批量汇总；Claude CLI 优先，API Key 兜底 |
 
 ## 功能特性
 
-- **多平台支持**：SE9 (linaro)、SE12、EVB 等 CVITEK 芯片平台
+- **多平台支持**：SE9 (linaro)、SE13 (CV84X6)、EVB 等 CVITEK 芯片平台
 - **测试类型**：老化测试、reboot 测试、CPU/DPU/JPU/TPU/VPU 模块测试
 - **集群老化**：多设备并行老化测试，统一管理
 - **实时监控**：WebSocket 实时推送测试步骤、日志、状态
 - **系统日志**：通过 SSH + journalctl 实时采集设备系统日志
-- **AI 分析**：快速分析（DeepSeek API）/ 深度分析（Claude CLI）
+- **AI 分析**：详情页单测 AI 分析（系统日志/老化日志）+ 结果页批量汇总（自动定位失败设备 SN/IP）；引擎 **Claude CLI 优先，API Key 兜底**
+- **SE13 产测**：/data/SE13_test_files/ + 2.4GB 老化包，产品线一键切换
 - **历史数据**：SQLite 存储全部测试结果，支持多条件查询和统计
 - **SN 抓拍**：SE9 识别到 SN 时抓取设备图入库，前端按 SN / 日期查询查看（详见下方「SN 抓拍」节）
 - **调机预览**：板子双路相机实时画面中继到网页，调镜头时用（详见下方「调机预览」节）
